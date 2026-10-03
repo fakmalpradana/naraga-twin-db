@@ -1,1 +1,93 @@
-<!doctype html><title>viewer</title>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalog Viewer</title>
+<link href="https://cesium.com/downloads/cesiumjs/releases/1.130/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
+  #app { display: grid; grid-template-columns: 320px 1fr; height: 100%; }
+  aside { padding: 12px; overflow: auto; background: #f7f8fa; border-right: 1px solid #ddd; }
+  label { display: block; margin: 10px 0 2px; font-weight: 600; font-size: 12px; color: #444; }
+  input, select, button { width: 100%; box-sizing: border-box; padding: 6px; }
+  button { margin-top: 10px; cursor: pointer; }
+  #cesium { height: 100%; }
+  #err { display: none; background: #fde8e8; color: #8a1c1c; padding: 8px; margin: 8px 0; border-radius: 4px; }
+  pre { white-space: pre-wrap; background: #fff; border: 1px solid #ddd; padding: 8px; font-size: 12px; }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 8px; background: #e6f4ea; font-size: 12px; }
+  .tag.stale { background: #fff3cd; } .tag.draft { background: #eee; }
+  @media (max-width: 700px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 60%; } }
+</style></head>
+<body><div id="app">
+<aside>
+  <h3 style="margin-top:0">Catalog Viewer</h3>
+  <div id="err" role="alert"></div>
+  <label for="api">API address</label><input id="api">
+  <label for="token">Cesium ion token (stays in this browser only)</label><input id="token" type="password" autocomplete="off">
+  <label for="dataset">Dataset</label><select id="dataset"></select>
+  <label for="theme">Theme</label><select id="theme"></select>
+  <label for="lod">LOD</label><select id="lod"></select>
+  <button id="load">Load layer</button>
+  <h4>Layer</h4><div id="meta">Nothing loaded.</div>
+  <h4>Clicked object</h4><pre id="feature">Click a building after loading a layer.</pre>
+</aside>
+<div id="cesium"></div></div>
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.130/Build/Cesium/Cesium.js"></script>
+<script type="module">
+import { createClient } from "/client/naraga-catalog.js";
+const $ = (id) => document.getElementById(id);
+const store = { get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+const show = (msg) => { $("err").style.display = msg ? "block" : "none"; $("err").textContent = msg || ""; };
+$("api").value = store.get("api") || location.origin;
+$("token").value = store.get("ionToken");
+
+let viewer, client, layers = [], loaded, stopPicking;
+function init() {
+  Cesium.Ion.defaultAccessToken = $("token").value;
+  // Without an ion token use OpenStreetMap as base map (the default ion base map needs a token).
+  viewer ??= new Cesium.Viewer("cesium", { baseLayerPicker: false, timeline: false, animation: false,
+    ...($("token").value ? {} : { baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" })) }) });
+}
+const fill = (sel, values, all) => { $(sel).innerHTML = (all ? `<option value="">${all}</option>` : "") +
+  [...new Set(values)].map((v) => `<option>${v}</option>`).join(""); };
+
+async function refresh() {
+  show();
+  try {
+    client = createClient($("api").value);
+    stopPicking?.();
+    stopPicking = client.enablePicking(viewer, (f, err) => {
+      $("feature").textContent = err ? err.message : f ? JSON.stringify(f, null, 2) : "No object at this point."; });
+    layers = await client.get("/catalog", { status: "all", limit: 500 }).then((r) => r.items);
+    fill("dataset", layers.map((l) => l.dataset.code));
+    narrow();
+  } catch (e) { show("Cannot reach the API: " + e.message); }
+}
+function narrow() {
+  const ds = layers.filter((l) => l.dataset.code === $("dataset").value);
+  fill("theme", ds.map((l) => l.theme));
+  const th = ds.filter((l) => l.theme === $("theme").value);
+  fill("lod", th.map((l) => l.lod));
+}
+$("dataset").onchange = narrow; $("theme").onchange = narrow;
+$("api").onchange = () => { store.set("api", $("api").value); refresh(); };
+$("token").onchange = () => { store.set("ionToken", $("token").value); location.reload(); };
+
+$("load").onclick = async () => {
+  show(); init();
+  const l = layers.find((x) => x.dataset.code === $("dataset").value && x.theme === $("theme").value && String(x.lod) === $("lod").value);
+  if (!l) return show("Choose a dataset, theme and LOD.");
+  if (!l.tileset) return show(`Layer is "${l.status}" and has no active tileset yet.`);
+  if (l.tileset.provider === "cesium_ion" && !$("token").value) return show("Enter a Cesium ion token to load ion tiles.");
+  try {
+    if (loaded) viewer.scene.primitives.remove(loaded);
+    const { tileset } = await client.loadTileset(viewer, { dataset: l.dataset.code, theme: l.theme, lod: l.lod });
+    loaded = tileset; viewer.zoomTo(tileset);
+    $("meta").innerHTML = `<b>${l.title || l.dataset.code}</b><br><span class="tag ${l.status}">${l.status}</span>
+      ${l.isStale ? '<span class="tag stale">stale: data changed after tiles were built</span>' : ""}<br>
+      tileset v${l.tileset.version} (${l.tileset.provider}${l.tileset.ionAssetId ? " #" + l.tileset.ionAssetId : ""})<br>
+      objects: ${l.featureCount}<br>height datum: ${l.dataset.verticalDatum}<br>${l.dataset.attribution || ""}`;
+    viewer.creditDisplay.addStaticCredit(new Cesium.Credit(l.dataset.attribution || ""));
+  } catch (e) { show("Could not load tiles: " + e.message); }
+};
+init(); refresh();
+</script></body></html>

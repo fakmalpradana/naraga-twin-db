@@ -14,7 +14,7 @@ Status: **draft v0.1 for review**. Items marked *verify* are assumptions to chec
 `.env.example` is committed; `.env` is git-ignored.
 
 # Local
-`make up` (db + api) → `make migrate` → `make seed` → open `http://localhost:8000/admin`, `/viewer/`, `/api/v1/docs`. `make test` runs migration + invariant tests. Pinned image: `3dcitydb/3dcitydb-pg:16-3.4-5.1.4`; citydb-tool 1.4.0.
+`cp .env.example .env`, then `make up` (db + api) → `make migrate` → `make seed` → open `http://localhost:8000/admin`, `/viewer/`, `/api/v1/docs`. `make test` runs migration + invariant tests. Pinned image: `3dcitydb/3dcitydb-pg:16-3.4-5.1.4`; citydb-tool 1.4.0.
 
 # Railway
 Services (same Dockerfiles as local, `railway.toml` per service):
@@ -28,3 +28,15 @@ Rollback: redeploy the previous api deployment; DB changes are forward-only migr
 
 # New project from the template
 Copy/fork the repo → change `.env` (SRID, project name) → add `db/seeds/<project>/` → `make up migrate seed`. Add themes by inserting into `ref_theme` (admin UI).
+
+# Files in the repository
+
+| File | Purpose |
+|---|---|
+| `docker-compose.yml` | Local db and api |
+| `api/Dockerfile`, `api/entrypoint.sh` | api image; on start: dbmate up, create login roles, seeds, Django migrate, groups and first admin, gunicorn |
+| `railway.toml` | api service on Railway (Dockerfile build, health check `/api/v1/health`) |
+| `deploy/db/Dockerfile`, `deploy/db/railway.toml` | db service with `PGDATA` in a subfolder of the volume |
+| `deploy/backup/` | nightly dump job (cron `0 18 * * *`), tested locally for dump and restore |
+
+Database logins: `twin_app` (Django admin; Django groups decide who may edit or delete) and `twin_api` (read-only API). Passwords come from `APP_DB_PASSWORD` and `API_DB_PASSWORD`. `ADMIN_EDIT_ENABLED=0` keeps the admin read-only (checkpoint); set `1` to enable editing.

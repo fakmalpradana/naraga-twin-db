@@ -33,7 +33,9 @@ FDESC = {
 RDESC = {"twin_ro": "Read catalog, audit and the 3D city model (API, viewers)",
          "twin_editor": "Insert and update catalog rows (admin UI)",
          "twin_admin": "Editor rights plus DELETE and refresh_derived()",
-         "twin_importer": "Editor rights plus writing citydb (citydb-tool) and refresh_derived()"}
+         "twin_importer": "Editor rights plus writing citydb (citydb-tool) and refresh_derived()",
+         "twin_app": "Login used by the Django admin (member of twin_admin; Django groups decide who edits or deletes)",
+         "twin_api": "Login used by the read-only API (member of twin_ro, read-only transactions)"}
 
 
 def cell(s):

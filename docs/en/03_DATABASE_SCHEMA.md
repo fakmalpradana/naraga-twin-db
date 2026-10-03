@@ -440,6 +440,8 @@ Roles are NOLOGIN group roles. Create one login user per person or service and g
 | Role | Login | Member of | Purpose |
 |---|---|---|---|
 | `twin_admin` | no | twin_editor | Editor rights plus DELETE and refresh_derived() |
+| `twin_api` | yes | twin_ro | Login used by the read-only API (member of twin_ro, read-only transactions) |
+| `twin_app` | yes | twin_admin | Login used by the Django admin (member of twin_admin; Django groups decide who edits or deletes) |
 | `twin_editor` | no | twin_ro | Insert and update catalog rows (admin UI) |
 | `twin_importer` | no | twin_editor | Editor rights plus writing citydb (citydb-tool) and refresh_derived() |
 | `twin_ro` | no | - | Read catalog, audit and the 3D city model (API, viewers) |

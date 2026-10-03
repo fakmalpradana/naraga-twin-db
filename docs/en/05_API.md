@@ -31,7 +31,7 @@ Catalog item:
 (values illustrative)
 
 # Tile ↔ database link
-Each tile object must carry its `objectid` (gml:id). The frontend reads it on click and calls `/features/{objectid}`. Verified status: **pending** (convertwin id preservation is checked on 9 Oct).
+Each tile object must carry its `objectid` (gml:id). The frontend reads it on click and calls `/features/{objectid}`. Verified status: **pending** for real tiles (the API side is tested with a fixture feature) (convertwin id preservation is checked on 9 Oct).
 
 # Connector deliverables
 - `client/naraga-catalog.js` - ES module, no dependencies: `listLayers({lod})`, `loadTileset(viewer, lod)`, `getFeature(id)`, `enablePicking(viewer)`.
@@ -39,3 +39,7 @@ Each tile object must carry its `objectid` (gml:id). The frontend reads it on cl
 - `postman/` - `naraga-catalog.postman_collection.json`, `local` and `railway` environments (`baseUrl`, secret `ionToken`). Tests per request: status code, schema, filter respected, pagination, error format, response-time budget. Run headless: `newman run postman/naraga-catalog.postman_collection.json -e postman/local.postman_environment.json`.
 
 Cesium ion token lives only in the frontend. NARAGA token auth is a later phase.
+
+# Verification status
+
+Verified on 4 October 2026 against the local stack: 13 pytest integration tests (filters, pagination, error format, tileset, features, admin audit user) and the Postman collection through newman (21 requests, 61 assertions, 0 failed). The viewer loads, lists layers from the API and shows a clear message for a layer without an active tileset. Loading real tiles and click-to-attributes is not yet tested because no tileset exists yet.
