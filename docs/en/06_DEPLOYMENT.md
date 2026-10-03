@@ -17,7 +17,9 @@ Status: **draft v0.1 for review**. Items marked *verify* are assumptions to chec
 `cp .env.example .env`, then `make up` (db + api) → `make migrate` → `make seed` → open `http://localhost:8000/admin`, `/viewer/`, `/api/v1/docs`. `make test` runs migration + invariant tests. Pinned image: `3dcitydb/3dcitydb-pg:16-3.4-5.1.4`; citydb-tool 1.4.0.
 
 # Railway
-Services (same Dockerfiles as local, `railway.toml` per service):
+
+The complete step-by-step procedure is in the *Railway Deployment Guide*. Railway Config as Code (`railway.toml`) is deprecated and stops working on 1 December 2026, so this repository sets Dockerfile paths, health checks and cron schedules in the Railway dashboard instead.
+Services (same Dockerfiles as local):
 1. **db** - image `3dcitydb/3dcitydb-pg:16-3.4-5.1.4`, volume mounted at the Postgres data dir, private networking only, env `SRID`, `HEIGHT_EPSG`, `POSTGRES_PASSWORD`. *verify:* init works on a Railway volume (may need `PGDATA` subdirectory), volume size/plan cost for the LOD1 data, image runs on Railway's amd64 hosts.
 2. **api** - Django; pre-deploy command `dbmate up && psql -f db/seeds/$PROJECT/*.sql`; healthcheck `/api/v1/health`; public domain; `DATABASE_URL` from the private network.
 3. **backup** (cron) - nightly `pg_dump -Fc` to an S3-compatible bucket. Do not rely on volume snapshots alone.
@@ -35,8 +37,7 @@ Copy/fork the repo → change `.env` (SRID, project name) → add `db/seeds/<pro
 |---|---|
 | `docker-compose.yml` | Local db and api |
 | `api/Dockerfile`, `api/entrypoint.sh` | api image; on start: dbmate up, create login roles, seeds, Django migrate, groups and first admin, gunicorn |
-| `railway.toml` | api service on Railway (Dockerfile build, health check `/api/v1/health`) |
-| `deploy/db/Dockerfile`, `deploy/db/railway.toml` | db service with `PGDATA` in a subfolder of the volume |
-| `deploy/backup/` | nightly dump job (cron `0 18 * * *`), tested locally for dump and restore |
+| `deploy/db/Dockerfile` | db service with `PGDATA` in a subfolder of the volume |
+| `deploy/backup/` | nightly dump job (set cron `0 18 * * *` in the Railway dashboard), tested locally for dump and restore |
 
 Database logins: `twin_app` (Django admin; Django groups decide who may edit or delete) and `twin_api` (read-only API). Passwords come from `APP_DB_PASSWORD` and `API_DB_PASSWORD`. `ADMIN_EDIT_ENABLED=0` keeps the admin read-only (checkpoint); set `1` to enable editing.
