@@ -1,7 +1,10 @@
 from django.contrib import admin
 from django.http import HttpResponseRedirect
 from django.urls import path
-from django.views.static import serve
+from django.views.decorators.cache import never_cache
+from django.views.static import serve as _serve
+
+serve = never_cache(_serve)   # viewer/client are edited often; avoid stale cached copies
 from django.conf import settings
 from catalog.api import api
 

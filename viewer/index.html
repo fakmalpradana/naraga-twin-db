@@ -3,18 +3,20 @@
 <title>Catalog Viewer</title>
 <link href="https://cesium.com/downloads/cesiumjs/releases/1.130/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
 <style>
-  html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
-  #app { display: grid; grid-template-columns: 320px 1fr; height: 100%; }
-  aside { padding: 12px; overflow: auto; background: #f7f8fa; border-right: 1px solid #ddd; }
+  html, body { margin: 0; height: 100%; overflow: hidden; font: 14px system-ui, sans-serif; }
+  #cesium .cesium-viewer { position: absolute; inset: 0; }
+  #app { display: grid; grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; overflow: hidden; }
+  aside { padding: 12px; overflow: auto; min-height: 0; background: #f7f8fa; border-right: 1px solid #ddd; }
   label { display: block; margin: 10px 0 2px; font-weight: 600; font-size: 12px; color: #444; }
   input, select, button { width: 100%; box-sizing: border-box; padding: 6px; }
   button { margin-top: 10px; cursor: pointer; }
-  #cesium { height: 100%; }
+  #cesium { position: relative; min-height: 0; height: 100%; overflow: hidden; }
+  #cesium .cesium-widget, #cesium .cesium-widget canvas { width: 100%; height: 100%; display: block; }
   #err { display: none; background: #fde8e8; color: #8a1c1c; padding: 8px; margin: 8px 0; border-radius: 4px; }
   pre { white-space: pre-wrap; background: #fff; border: 1px solid #ddd; padding: 8px; font-size: 12px; }
   .tag { display: inline-block; padding: 1px 6px; border-radius: 8px; background: #e6f4ea; font-size: 12px; }
   .tag.stale { background: #fff3cd; } .tag.draft { background: #eee; }
-  @media (max-width: 700px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 60%; } }
+  @media (max-width: 700px) { #app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); } aside { max-height: 40vh; } }
 </style></head>
 <body><div id="app">
 <aside>
@@ -43,9 +45,12 @@ $("token").value = store.get("ionToken");
 let viewer, client, layers = [], loaded, stopPicking;
 function init() {
   Cesium.Ion.defaultAccessToken = $("token").value;
-  // Without an ion token use OpenStreetMap as base map (the default ion base map needs a token).
-  viewer ??= new Cesium.Viewer("cesium", { baseLayerPicker: false, timeline: false, animation: false,
-    ...($("token").value ? {} : { baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" })) }) });
+  // Without an ion token use Cesium's bundled offline imagery (the default ion base map needs a token,
+  // and OpenStreetMap blocks tile use from apps that are not registered with it).
+  viewer ??= new Cesium.Viewer("cesium", { baseLayerPicker: false, geocoder: false, timeline: false, animation: false,
+    ...($("token").value ? {} : { baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+      Cesium.TileMapServiceImageryProvider.fromUrl(Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII"))) }) });
+  window.__viewer = viewer;   // handy for debugging in the browser console
 }
 const fill = (sel, values, all) => { $(sel).innerHTML = (all ? `<option value="">${all}</option>` : "") +
   [...new Set(values)].map((v) => `<option>${v}</option>`).join(""); };
@@ -89,5 +94,8 @@ $("load").onclick = async () => {
     viewer.creditDisplay.addStaticCredit(new Cesium.Credit(l.dataset.attribution || ""));
   } catch (e) { show("Could not load tiles: " + e.message); }
 };
-init(); refresh();
+init();
+// start over the IKN area instead of empty space
+viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(116.75, -0.95, 120000) });
+refresh();
 </script></body></html>
