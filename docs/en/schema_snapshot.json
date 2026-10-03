@@ -8,6 +8,20 @@
             ]
         },
         {
+            "name": "twin_api",
+            "login": true,
+            "member_of": [
+                "twin_ro"
+            ]
+        },
+        {
+            "name": "twin_app",
+            "login": true,
+            "member_of": [
+                "twin_admin"
+            ]
+        },
+        {
             "name": "twin_editor",
             "login": false,
             "member_of": [

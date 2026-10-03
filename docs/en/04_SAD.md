@@ -57,7 +57,7 @@ Local: `docker-compose.yml` (db, api, optional backup). Railway: same Dockerfile
 # Architecture decisions (ADR)
 | # | Decision | Why / consequence |
 |---|---|---|
-| 001 | 3DCityDB **v5.1.4**, CityGML 2.0 imported as-is (option A), exported as 2.0 | Fixed versions keep semantics; LOD4 stays as deprecated properties. Round-trip test = counts per class/LOD/rooms + area/volume. Fallback v4 if it fails |
+| 001 | 3DCityDB **v5.1.4**, CityGML 2.0 imported as-is (option A), exported as 2.0 | Fixed versions keep semantics; LOD4 stays as deprecated properties. Round-trip test = counts per class/LOD/rooms + area/volume; passed on a synthetic sample, real LOD4 sample pending. Fallback v4 if it fails |
 | 002 | Catalog in separate schema `catalog`; `citydb` untouched but one index | 3DCityDB upgrades don't break catalog; re-run migration after upgrade |
 | 003 | Layer = (dataset, theme, LOD), a publishing slice; version on tileset | A feature can carry several LODs; feature history is in 3DCityDB |
 | 004 | Feature↔dataset binding by `feature.lineage` tag; no link table | Native, indexed, no millions of link rows |
