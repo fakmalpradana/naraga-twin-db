@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Import one CityGML 2.0 file into 3DCityDB with traceability (job row, lineage tag, user, counts).
 # Usage: scripts/import.sh USER=name FILE=path/to/file.gml DATASET=oikn THEME=building LOD=1 [MODE=import_all]
-# Local docker compose only. For Railway, run the same citydb-tool command against the private DB address.
+# Local docker compose by default. For a remote database (e.g. Railway TCP proxy) also pass
+#   REMOTE_HOST=<host> REMOTE_PORT=<port> REMOTE_PASSWORD=<postgres password>
 set -euo pipefail
 for kv in "$@"; do export "$kv"; done
 : "${USER:?USER=<your name> is required}" "${FILE:?FILE=... required}" "${DATASET:?}" "${THEME:?}" "${LOD:?}"
@@ -11,7 +12,15 @@ cd "$(dirname "$0")/.."
 [ -f .env ] && set -a && . ./.env && set +a
 TAG="${DATASET}.${THEME}.lod${LOD}"
 SHA=$(shasum -a 256 "$FILE" | cut -d' ' -f1); SIZE=$(wc -c < "$FILE" | tr -d ' ')
-psql_db() { docker compose exec -T db psql -U postgres -v ON_ERROR_STOP=1 -qAt -v u="$USER" "$@"; }
+if [ -n "${REMOTE_HOST:-}" ]; then
+  : "${REMOTE_PORT:?}" "${REMOTE_PASSWORD:?}"
+  psql_db() { PGPASSWORD="$REMOTE_PASSWORD" psql -h "$REMOTE_HOST" -p "$REMOTE_PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 -qAt -v u="$USER" "$@"; }
+  DB_ARGS=(-H "$REMOTE_HOST" -P "$REMOTE_PORT" -d postgres -u postgres -p "$REMOTE_PASSWORD"); NET_ARGS=()
+else
+  psql_db() { docker compose exec -T db psql -U postgres -v ON_ERROR_STOP=1 -qAt -v u="$USER" "$@"; }
+  DB_ARGS=(-H db -d postgres -u postgres -p "${POSTGRES_PASSWORD:-change-me}")
+  NET_ARGS=(--network "$(docker compose ps -q db | xargs docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')")
+fi
 SQL_USER="SELECT set_config('app.user', :'u', false) \\gset"
 
 JOB=$(psql_db <<SQL | tail -1
@@ -30,9 +39,9 @@ SQL
 echo "import job $JOB, lineage $TAG"
 
 set +e
-docker run --rm --platform linux/amd64 --network "$(docker compose ps -q db | xargs docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')" \
+docker run --rm --platform linux/amd64 "${NET_ARGS[@]}" \
   -v "$(cd "$(dirname "$FILE")" && pwd)":/data:ro 3dcitydb/citydb-tool:1.4.0 import citygml \
-  -H db -d postgres -u postgres -p "${POSTGRES_PASSWORD:-change-me}" \
+  "${DB_ARGS[@]}" \
   --lineage "$TAG" --reason-for-update "import_job:$JOB" --updating-person "$USER" -m "$MODE" --compute-extent \
   "/data/$(basename "$FILE")"
 RC=$?

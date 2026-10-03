@@ -71,7 +71,7 @@ Local: `docker-compose.yml` (db, api, optional backup). Railway: same Dockerfile
 | 012 | Tile objects carry `objectid` (gml:id) so click → `/features/{objectid}` | Tile ↔ CityDB integration. **Unverified**: that convertwin preserves ids (check 9 Oct); fallback own writer |
 | 013 | Geometry is never edited in the UI; edits via 2D source → regenerate → delete by lineage → re-import | 3D editing is unsafe for non-IT users (post-checkpoint) |
 | 014 | Plain internal accounts (Django) now; NARAGA SSO later through the same `app.user` mechanism | Internal tool, simple |
-| 015 | Railway as target host, Docker-portable | `railway.toml` per service; no Railway-only features in code |
+| 015 | Railway as target host, Docker-portable | Dockerfiles per service, settings in the dashboard (railway.toml is deprecated); no Railway-only features in code |
 
 # Security and access
 Admin/viewer: Django username/password (admin-created, one per person), groups viewer/editor/admin, HTTPS. DB: least-privilege roles; the API connects as `twin_ro`, admin as `twin_editor`. API read-only, unauthenticated at checkpoint, CORS allow-list via env. Cesium ion token only in frontend/viewer (browser storage), never in API or DB. Secrets only in env vars, `.env` git-ignored. DB not exposed publicly in production.

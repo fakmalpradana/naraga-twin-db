@@ -129,6 +129,8 @@ DOCS = [
      "Configuration, local Docker, Railway and how to start a new project from the template."),
     ("07_RUNBOOK.md", "Runbook", "Operations Runbook",
      "Import, re-import, publish, backup, restore and user management."),
+    ("08_RAILWAY_GUIDE.md", "Railway Guide", "Railway Deployment Guide",
+     "Step-by-step deployment of the database, API and backup job on Railway, with checks and troubleshooting."),
 ]
 
 
