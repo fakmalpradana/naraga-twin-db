@@ -1,0 +1,15 @@
+from django.contrib import admin
+from django.http import HttpResponseRedirect
+from django.urls import path
+from django.views.static import serve
+from django.conf import settings
+from catalog.api import api
+
+urlpatterns = [
+    path("", lambda r: HttpResponseRedirect("/viewer/")),
+    path("admin/", admin.site.urls),
+    path("api/v1/", api.urls),
+    path("viewer/", serve, {"document_root": settings.ROOT / "viewer", "path": "index.html"}),
+    path("viewer/<path:path>", serve, {"document_root": settings.ROOT / "viewer"}),
+    path("client/<path:path>", serve, {"document_root": settings.ROOT / "client"}),
+]

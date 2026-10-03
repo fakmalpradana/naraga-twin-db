@@ -1,0 +1,23 @@
+services:
+  db:
+    image: 3dcitydb/3dcitydb-pg:16-3.4-5.1.4   # pinned; amd64 image (emulated on Apple silicon)
+    platform: linux/amd64
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      SRID: ${CITYDB_SRID:-32750}
+      HEIGHT_EPSG: ${CITYDB_HEIGHT_EPSG:-4979}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["${DB_PORT:-55432}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U postgres -tAc \"select count(*) from information_schema.tables where table_schema='citydb'\" | grep -q '^[1-9]'"]
+      interval: 5s
+      retries: 60
+  api:
+    build: {context: ., dockerfile: api/Dockerfile}
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-change-me}@db:5432/postgres?sslmode=disable
+    depends_on: {db: {condition: service_healthy}}
+    ports: ["${API_PORT:-8000}:8000"]
+volumes:
+  pgdata:
