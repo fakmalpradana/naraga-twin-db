@@ -1,0 +1,8 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<table style="width:100%"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Changes (field: old → new)</th></tr></thead><tbody>
+{% for e in entries %}<tr><td>{{ e.at|date:"Y-m-d H:i:s" }}</td><td>{{ e.user }}</td><td>{{ e.op }}</td>
+<td>{% for k, o, n in e.diff %}<div><b>{{ k }}</b>: {{ o|default_if_none:"(empty)" }} → {{ n|default_if_none:"(empty)" }}</div>{% empty %}-{% endfor %}</td></tr>
+{% empty %}<tr><td colspan="4">No history yet.</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

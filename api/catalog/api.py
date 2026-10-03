@@ -1,0 +1,202 @@
+"""Read-only API /api/v1 (django-ninja). Uses the SELECT-only DB alias `ro`; never writes."""
+from typing import Optional
+
+from django.db import connections
+from ninja import NinjaAPI, Query
+from ninja.errors import HttpError, ValidationError
+
+api = NinjaAPI(title="Digital Twin Catalog API", version="1.0", urls_namespace="catalog-api",
+               description="Read-only API: layers and tilesets for the Cesium frontend, plus city object attributes from 3DCityDB.")
+
+
+def error(status, code, message, details=None):
+    return status, {"error": {"code": code, "message": message, "details": details or {}}}
+
+
+@api.exception_handler(ValidationError)
+def on_validation(request, exc):
+    first = exc.errors[0] if exc.errors else {}
+    field = ".".join(str(x) for x in first.get("loc", [])[1:]) or None
+    _, body = error(422, "invalid_parameter", f"{field or 'parameter'}: {first.get('msg', 'invalid')}", {"field": field})
+    return api.create_response(request, body, status=422)
+
+
+@api.exception_handler(HttpError)
+def on_http(request, exc):
+    codes = {400: "bad_request", 404: "not_found", 409: "ambiguous", 422: "invalid_parameter"}
+    _, body = error(exc.status_code, codes.get(exc.status_code, "error"), str(exc))
+    return api.create_response(request, body, status=exc.status_code)
+
+
+@api.exception_handler(Exception)
+def on_error(request, exc):
+    _, body = error(500, "internal_error", "Unexpected error")
+    return api.create_response(request, body, status=500)
+
+
+def rows(sql, params=()):
+    with connections["ro"].cursor() as cur:
+        cur.execute(sql, params)
+        cols = [c[0] for c in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def parse_bbox(bbox):
+    try:
+        minx, miny, maxx, maxy = (float(v) for v in bbox.split(","))
+    except ValueError:
+        raise HttpError(422, "bbox must be minx,miny,maxx,maxy (lon/lat EPSG:4326)")
+    if not (-180 <= minx < maxx <= 180 and -90 <= miny < maxy <= 90):
+        raise HttpError(422, "bbox out of range or minx>=maxx or miny>=maxy")
+    return minx, miny, maxx, maxy
+
+
+def layer_item(r):
+    bbox = [float(r[k]) for k in ("bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy")] if r["bbox_minx"] is not None else None
+    tileset = None
+    if r["tileset_id"]:
+        tileset = {"id": str(r["tileset_id"]), "version": r["tileset_version"], "provider": r["provider"],
+                   "ionAssetId": r["ion_asset_id"], "url": r["url"], "heightOffsetM": float(r["height_offset_m"]),
+                   "publishedAt": r["published_at"].isoformat() if r["published_at"] else None}
+    return {"layerId": str(r["layer_id"]), "title": r["title"],
+            "dataset": {"code": r["dataset_code"], "name": r["dataset_name"], "generatedBy": r["generated_by"],
+                        "attribution": r["attribution"], "verticalDatum": r["vertical_datum"]},
+            "theme": r["theme_code"], "lod": r["lod"], "status": r["status"], "featureCount": r["feature_count"],
+            "isStale": r["is_stale"], "bbox": bbox, "tileset": tileset}
+
+
+@api.get("/health", tags=["service"])
+def health(request):
+    try:
+        rows("SELECT 1")
+        return {"status": "ok", "database": "ok"}
+    except Exception:
+        return api.create_response(request, {"status": "degraded", "database": "unreachable"}, status=503)
+
+
+@api.get("/catalog", tags=["catalog"], summary="Layers with their active tileset")
+def catalog(request, lod: Optional[int] = Query(None, ge=0, le=4), theme: Optional[str] = None,
+            dataset: Optional[str] = None, status: str = "published", bbox: Optional[str] = None,
+            limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    valid = {r["code"] for r in rows("SELECT code FROM catalog.ref_layer_status")}
+    if status != "all" and status not in valid:
+        raise HttpError(422, f"status must be one of {sorted(valid)} or 'all'")
+    where, p = [], []
+    if status != "all": where.append("status = %s"); p.append(status)
+    if lod is not None: where.append("lod = %s"); p.append(lod)
+    if theme: where.append("theme_code = %s"); p.append(theme)
+    if dataset: where.append("dataset_code = %s"); p.append(dataset)
+    if bbox:
+        where.append("bbox && ST_MakeEnvelope(%s, %s, %s, %s, 4326)"); p += parse_bbox(bbox)
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    total = rows(f"SELECT count(*) AS n FROM catalog.v_layer {w}", p)[0]["n"]
+    items = rows(f"SELECT * FROM catalog.v_layer {w} ORDER BY dataset_code, theme_code, lod LIMIT %s OFFSET %s", p + [limit, offset])
+    return {"items": [layer_item(r) for r in items], "limit": limit, "offset": offset, "total": total}
+
+
+@api.get("/layers/{layer_id}/tileset", tags=["catalog"])
+def layer_tileset(request, layer_id: str):
+    try:
+        r = rows("SELECT * FROM catalog.v_layer WHERE layer_id = %s", [layer_id])
+    except Exception:
+        raise HttpError(422, "layer_id must be a UUID")
+    if not r or not r[0]["tileset_id"]:
+        raise HttpError(404, "Layer not found or it has no active tileset")
+    return layer_item(r[0])["tileset"]
+
+
+@api.get("/datasets", tags=["datasets"])
+def datasets(request, limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    total = rows("SELECT count(*) AS n FROM catalog.dataset WHERE status = 'active'")[0]["n"]
+    items = rows("""SELECT d.code, d.name, d.region, d.generated_by, d.vertical_datum, d.attribution,
+                           (SELECT count(*) FROM catalog.layer l WHERE l.dataset_id = d.id AND l.status <> 'archived') AS layers
+                    FROM catalog.dataset d WHERE d.status = 'active' ORDER BY d.code LIMIT %s OFFSET %s""", [limit, offset])
+    return {"items": [{"code": r["code"], "name": r["name"], "region": r["region"], "generatedBy": r["generated_by"],
+                       "verticalDatum": r["vertical_datum"], "attribution": r["attribution"], "layers": r["layers"]} for r in items],
+            "limit": limit, "offset": offset, "total": total}
+
+
+@api.get("/datasets/{code}", tags=["datasets"])
+def dataset(request, code: str):
+    d = rows("SELECT code, name, description, region, generated_by, vertical_datum, attribution, license FROM catalog.dataset WHERE code = %s", [code])
+    if not d:
+        raise HttpError(404, "Dataset not found")
+    layers = rows("SELECT * FROM catalog.v_layer WHERE dataset_code = %s AND status <> 'archived' ORDER BY theme_code, lod", [code])
+    r = d[0]
+    return {"code": r["code"], "name": r["name"], "description": r["description"], "region": r["region"],
+            "generatedBy": r["generated_by"], "verticalDatum": r["vertical_datum"], "attribution": r["attribution"],
+            "license": r["license"], "layers": [layer_item(x) for x in layers]}
+
+
+@api.get("/datasets/{code}/stats", tags=["datasets"])
+def dataset_stats(request, code: str):
+    if not rows("SELECT 1 FROM catalog.dataset WHERE code = %s", [code]):
+        raise HttpError(404, "Dataset not found")
+    st = rows("""SELECT theme_code, classname, lod, feature_count, is_toplevel FROM catalog.layer_feature_stats
+                 WHERE dataset_code = %s ORDER BY theme_code, classname, lod""", [code])
+    return {"dataset": code, "items": [{"theme": r["theme_code"], "class": r["classname"], "lod": r["lod"] or None,
+                                        "topLevel": r["is_toplevel"], "featureCount": r["feature_count"]} for r in st]}
+
+
+def value_of(r):
+    for k in ("val_double", "val_int", "val_string", "val_timestamp", "val_uri"):
+        if r[k] is not None:
+            v = r[k]
+            return v.isoformat() if hasattr(v, "isoformat") else v
+    return None
+
+
+@api.get("/features/{objectid}", tags=["features"], summary="Attributes of one city object (gml:id)")
+def feature(request, objectid: str, dataset: Optional[str] = None):
+    where, p = ["f.objectid = %s", "f.termination_date IS NULL"], [objectid]
+    if dataset:
+        where.append("(f.lineage = %s OR f.lineage LIKE %s)"); p += [dataset, dataset.replace("_", "\\_") + ".%"]
+    found = rows(f"""SELECT f.id, f.objectid, oc.classname, f.lineage, f.creation_date, f.last_modification_date, f.updating_person,
+                            ST_XMin(ST_Transform(f.envelope, 4326)) AS x0, ST_YMin(ST_Transform(f.envelope, 4326)) AS y0,
+                            ST_XMax(ST_Transform(f.envelope, 4326)) AS x1, ST_YMax(ST_Transform(f.envelope, 4326)) AS y1
+                     FROM citydb.feature f JOIN citydb.objectclass oc ON oc.id = f.objectclass_id
+                     WHERE {' AND '.join(where)} LIMIT 2""", p)
+    if not found:
+        raise HttpError(404, "Feature not found")
+    if len(found) > 1:
+        raise HttpError(409, "objectid exists in several datasets; pass ?dataset=<code>")
+    f = found[0]
+    attrs = rows("""SELECT name, val_int, val_double, val_string, val_timestamp, val_uri, val_uom FROM citydb.property
+                    WHERE feature_id = %s AND val_geometry_id IS NULL AND val_implicitgeom_id IS NULL AND val_feature_id IS NULL
+                      AND (val_int IS NOT NULL OR val_double IS NOT NULL OR val_string IS NOT NULL OR val_timestamp IS NOT NULL OR val_uri IS NOT NULL)
+                    ORDER BY name""", [f["id"]])
+    lods = rows("SELECT DISTINCT val_lod FROM citydb.property WHERE feature_id = %s AND val_lod IS NOT NULL ORDER BY 1", [f["id"]])
+    parts = (f["lineage"] or "").split(".")
+    return {"objectid": f["objectid"], "class": f["classname"],
+            "dataset": parts[0] or None, "theme": parts[1] if len(parts) > 1 else None, "lineage": f["lineage"],
+            "lodsAvailable": [r["val_lod"] for r in lods],
+            "attributes": [{"name": a["name"], "value": value_of(a), "uom": a["val_uom"]} for a in attrs],
+            "bbox": [float(f[k]) for k in ("x0", "y0", "x1", "y1")] if f["x0"] is not None else None,
+            "createdAt": f["creation_date"].isoformat() if f["creation_date"] else None,
+            "modifiedAt": f["last_modification_date"].isoformat() if f["last_modification_date"] else None,
+            "modifiedBy": f["updating_person"]}
+
+
+@api.get("/features", tags=["features"], summary="Search city objects (GeoJSON, envelope footprints)")
+def features(request, dataset: Optional[str] = None, bbox: Optional[str] = None, q: Optional[str] = None,
+             limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    where, p = ["f.lineage IS NOT NULL", "f.termination_date IS NULL", "oc.is_toplevel = 1"], []
+    if dataset:
+        where.append("(f.lineage = %s OR f.lineage LIKE %s)"); p += [dataset, dataset.replace("_", "\\_") + ".%"]
+    if bbox:
+        where.append("f.envelope && ST_Transform(ST_MakeEnvelope(%s, %s, %s, %s, 4326), (SELECT srid FROM citydb.database_srs LIMIT 1))")
+        p += parse_bbox(bbox)
+    if q:
+        where.append("""EXISTS (SELECT 1 FROM citydb.property pn WHERE pn.feature_id = f.id AND pn.name = 'name' AND pn.val_string ILIKE %s)""")
+        p.append(f"%{q}%")
+    w = " AND ".join(where)
+    res = rows(f"""SELECT f.objectid, oc.classname, f.lineage,
+                          (SELECT pn.val_string FROM citydb.property pn WHERE pn.feature_id = f.id AND pn.name = 'name' LIMIT 1) AS name,
+                          ST_AsGeoJSON(ST_Transform(ST_Force2D(ST_Envelope(f.envelope)), 4326)) AS geom
+                   FROM citydb.feature f JOIN citydb.objectclass oc ON oc.id = f.objectclass_id
+                   WHERE {w} ORDER BY f.id LIMIT %s OFFSET %s""", p + [limit, offset])
+    import json
+    return {"type": "FeatureCollection", "limit": limit, "offset": offset,
+            "features": [{"type": "Feature", "geometry": json.loads(r["geom"]) if r["geom"] else None,
+                          "properties": {"objectid": r["objectid"], "class": r["classname"], "lineage": r["lineage"], "name": r["name"]}}
+                         for r in res]}
