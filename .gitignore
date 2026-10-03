@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+*.dump
+*.sql.gz
+*.gml
+*.xml
+*.laz
+*.las
+pgdata/
+__pycache__/
+.venv/
+node_modules/
+.DS_Store
+db/schema.sql
