@@ -1,0 +1,1619 @@
+{
+    "roles": [
+        {
+            "name": "twin_admin",
+            "login": false,
+            "member_of": [
+                "twin_editor"
+            ]
+        },
+        {
+            "name": "twin_editor",
+            "login": false,
+            "member_of": [
+                "twin_ro"
+            ]
+        },
+        {
+            "name": "twin_importer",
+            "login": false,
+            "member_of": [
+                "twin_editor"
+            ]
+        },
+        {
+            "name": "twin_ro",
+            "login": false,
+            "member_of": null
+        }
+    ],
+    "tables": [
+        {
+            "kind": "table",
+            "name": "change_log",
+            "schema": "audit",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "bigint",
+                    "comment": null,
+                    "default": "nextval('audit.change_log_id_seq'::regclass)",
+                    "not_null": true
+                },
+                {
+                    "name": "at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "app_user",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "db_user",
+                    "type": "text",
+                    "comment": null,
+                    "default": "CURRENT_USER",
+                    "not_null": true
+                },
+                {
+                    "name": "table_name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "pk",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "op",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "old_row",
+                    "type": "jsonb",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "new_row",
+                    "type": "jsonb",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                }
+            ],
+            "comment": "Automatic history of every change to catalog data: who, when, old and new values. Cannot be edited.",
+            "indexes": [
+                "CREATE UNIQUE INDEX change_log_pkey ON audit.change_log USING btree (id)",
+                "CREATE INDEX change_log_record_ix ON audit.change_log USING btree (table_name, pk, at DESC)",
+                "CREATE INDEX change_log_user_ix ON audit.change_log USING btree (app_user, at DESC)",
+                "CREATE INDEX change_log_at_ix ON audit.change_log USING btree (at DESC)"
+            ],
+            "triggers": null,
+            "constraints": [
+                {
+                    "def": "CHECK ((op = ANY (ARRAY['INSERT'::text, 'UPDATE'::text, 'DELETE'::text])))",
+                    "name": "change_log_op_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "change_log_pkey",
+                    "type": "p",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "view",
+            "name": "v_layer",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "layer_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "dataset_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "dataset_code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "dataset_name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "generated_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "attribution",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "vertical_datum",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "region",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "theme_code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "lod",
+                    "type": "smallint",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "bbox_minx",
+                    "type": "double precision",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "bbox_miny",
+                    "type": "double precision",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "bbox_maxx",
+                    "type": "double precision",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "bbox_maxy",
+                    "type": "double precision",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "bbox",
+                    "type": "geometry(Polygon,4326)",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "feature_count",
+                    "type": "bigint",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "tileset_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "tileset_version",
+                    "type": "integer",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "provider",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "ion_asset_id",
+                    "type": "bigint",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "url",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "height_offset_m",
+                    "type": "numeric",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "published_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "source_snapshot_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "is_stale",
+                    "type": "boolean",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "updated_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                }
+            ],
+            "comment": "One row per layer with its active tileset, object count and stale flag. Used by the API and the inventory.",
+            "indexes": null,
+            "triggers": null,
+            "constraints": null
+        },
+        {
+            "kind": "table",
+            "name": "dataset",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": "gen_random_uuid()",
+                    "not_null": true
+                },
+                {
+                    "name": "code",
+                    "type": "text",
+                    "comment": "Short unique name (a-z, 0-9, _). It is the tag stored on every 3D object, so it cannot be changed once data is imported.",
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "region",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "source_system",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "owner_org",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "contact_email",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "generated_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "'external'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "crs_epsg",
+                    "type": "integer",
+                    "comment": "Coordinate system of the SOURCE files (record only). The database itself has one fixed coordinate system.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "vertical_datum",
+                    "type": "text",
+                    "comment": "Height reference of the source: ellipsoid, egm2008, egm96, local or unknown. Needed to place tiles correctly in Cesium.",
+                    "default": "'unknown'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "license",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "attribution",
+                    "type": "text",
+                    "comment": "Credit line shown on the map (copyright/source).",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "bbox",
+                    "type": "geometry(Polygon,4326)",
+                    "comment": "Computed automatically from the data after import. Do not type by hand.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "comment": "active or archived. Archiving a dataset archives all its layers.",
+                    "default": "'active'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "created_by",
+                    "type": "text",
+                    "comment": "Filled automatically with the signed-in user.",
+                    "default": "''::text",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "''::text",
+                    "not_null": true
+                }
+            ],
+            "comment": "A collection of data for one area from one source, e.g. OIKN.",
+            "indexes": [
+                "CREATE UNIQUE INDEX dataset_pkey ON catalog.dataset USING btree (id)",
+                "CREATE UNIQUE INDEX dataset_code_key ON catalog.dataset USING btree (code)",
+                "CREATE INDEX dataset_bbox_gix ON catalog.dataset USING gist (bbox)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER a_stamp BEFORE INSERT OR UPDATE ON catalog.dataset FOR EACH ROW EXECUTE FUNCTION catalog.stamp()",
+                    "name": "a_stamp"
+                },
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.dataset FOR EACH ROW EXECUTE FUNCTION audit.log_change('id')",
+                    "name": "z_audit"
+                },
+                {
+                    "def": "CREATE TRIGGER b_guard BEFORE UPDATE OF code ON catalog.dataset FOR EACH ROW EXECUTE FUNCTION catalog.dataset_guard()",
+                    "name": "b_guard"
+                },
+                {
+                    "def": "CREATE TRIGGER c_archive AFTER UPDATE OF status ON catalog.dataset FOR EACH ROW EXECUTE FUNCTION catalog.dataset_archive_cascade()",
+                    "name": "c_archive"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((code ~ '^[a-z0-9_]+$'::text))",
+                    "name": "dataset_code_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "CHECK ((vertical_datum = ANY (ARRAY['ellipsoid'::text, 'egm2008'::text, 'egm96'::text, 'local'::text, 'unknown'::text])))",
+                    "name": "dataset_vertical_datum_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])))",
+                    "name": "dataset_status_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "dataset_pkey",
+                    "type": "p",
+                    "ref_table": null
+                },
+                {
+                    "def": "UNIQUE (code)",
+                    "name": "dataset_code_key",
+                    "type": "u",
+                    "ref_table": null
+                },
+                {
+                    "def": "FOREIGN KEY (generated_by) REFERENCES catalog.ref_generated_by(code)",
+                    "name": "dataset_generated_by_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.ref_generated_by"
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "import_job",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": "gen_random_uuid()",
+                    "not_null": true
+                },
+                {
+                    "name": "dataset_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "tool",
+                    "type": "text",
+                    "comment": null,
+                    "default": "'citydb-tool'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "tool_version",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "citygml_version",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "source_file",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "source_sha256",
+                    "type": "text",
+                    "comment": "Fingerprint of the file, to prove which exact file was imported.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "source_size_bytes",
+                    "type": "bigint",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "import_mode",
+                    "type": "text",
+                    "comment": null,
+                    "default": "'import_all'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "lineage_tag",
+                    "type": "text",
+                    "comment": "Tag written on imported objects: dataset.theme.lodN.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "comment": null,
+                    "default": "'running'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "validation_passed",
+                    "type": "boolean",
+                    "comment": "True when geometry/count checks (e.g. val3dity) passed. Required before a layer can be validated.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "counts",
+                    "type": "jsonb",
+                    "comment": null,
+                    "default": "'{}'::jsonb",
+                    "not_null": true
+                },
+                {
+                    "name": "report",
+                    "type": "jsonb",
+                    "comment": "Detailed validation report (JSON).",
+                    "default": "'{}'::jsonb",
+                    "not_null": true
+                },
+                {
+                    "name": "started_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "finished_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "created_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "''::text",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "''::text",
+                    "not_null": true
+                }
+            ],
+            "comment": "One uploaded/imported file and what happened to it (the upload registry).",
+            "indexes": [
+                "CREATE UNIQUE INDEX import_job_pkey ON catalog.import_job USING btree (id)",
+                "CREATE INDEX import_job_dataset_ix ON catalog.import_job USING btree (dataset_id, started_at DESC)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER a_stamp BEFORE INSERT OR UPDATE ON catalog.import_job FOR EACH ROW EXECUTE FUNCTION catalog.stamp()",
+                    "name": "a_stamp"
+                },
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.import_job FOR EACH ROW EXECUTE FUNCTION audit.log_change('id')",
+                    "name": "z_audit"
+                },
+                {
+                    "def": "CREATE TRIGGER b_guard BEFORE INSERT OR UPDATE ON catalog.import_job FOR EACH ROW EXECUTE FUNCTION catalog.import_job_guard()",
+                    "name": "b_guard"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((source_sha256 ~ '^[0-9a-f]{64}$'::text))",
+                    "name": "import_job_source_sha256_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "CHECK ((import_mode = ANY (ARRAY['import_all'::text, 'skip'::text, 'delete'::text, 'terminate'::text])))",
+                    "name": "import_job_import_mode_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])))",
+                    "name": "import_job_status_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "import_job_pkey",
+                    "type": "p",
+                    "ref_table": null
+                },
+                {
+                    "def": "FOREIGN KEY (dataset_id) REFERENCES catalog.dataset(id)",
+                    "name": "import_job_dataset_id_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.dataset"
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "import_job_layer",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "job_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "layer_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                }
+            ],
+            "comment": "Which layers a file filled (one file can fill several).",
+            "indexes": [
+                "CREATE UNIQUE INDEX import_job_layer_pkey ON catalog.import_job_layer USING btree (job_id, layer_id)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.import_job_layer FOR EACH ROW EXECUTE FUNCTION audit.log_change('job_id', 'layer_id')",
+                    "name": "z_audit"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (job_id, layer_id)",
+                    "name": "import_job_layer_pkey",
+                    "type": "p",
+                    "ref_table": null
+                },
+                {
+                    "def": "FOREIGN KEY (job_id) REFERENCES catalog.import_job(id) ON DELETE CASCADE",
+                    "name": "import_job_layer_job_id_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.import_job"
+                },
+                {
+                    "def": "FOREIGN KEY (layer_id) REFERENCES catalog.layer(id)",
+                    "name": "import_job_layer_layer_id_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.layer"
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "layer",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": "gen_random_uuid()",
+                    "not_null": true
+                },
+                {
+                    "name": "dataset_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "theme_code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "lod",
+                    "type": "smallint",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "title",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "comment": "draft -> validated -> published -> archived. Moves are checked by the database.",
+                    "default": "'draft'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "validated_by_job_id",
+                    "type": "uuid",
+                    "comment": "The successful import that justified validation.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "bbox",
+                    "type": "geometry(Polygon,4326)",
+                    "comment": "Computed automatically after import.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "created_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "''::text",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "''::text",
+                    "not_null": true
+                }
+            ],
+            "comment": "What the frontend chooses: one theme at one LOD of a dataset (e.g. OIKN buildings LOD1).",
+            "indexes": [
+                "CREATE UNIQUE INDEX layer_pkey ON catalog.layer USING btree (id)",
+                "CREATE UNIQUE INDEX layer_dataset_id_theme_code_lod_key ON catalog.layer USING btree (dataset_id, theme_code, lod)",
+                "CREATE INDEX layer_lod_status_ix ON catalog.layer USING btree (lod, status)",
+                "CREATE INDEX layer_bbox_gix ON catalog.layer USING gist (bbox)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER a_stamp BEFORE INSERT OR UPDATE ON catalog.layer FOR EACH ROW EXECUTE FUNCTION catalog.stamp()",
+                    "name": "a_stamp"
+                },
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.layer FOR EACH ROW EXECUTE FUNCTION audit.log_change('id')",
+                    "name": "z_audit"
+                },
+                {
+                    "def": "CREATE TRIGGER b_guard BEFORE UPDATE ON catalog.layer FOR EACH ROW EXECUTE FUNCTION catalog.layer_guard()",
+                    "name": "b_guard"
+                },
+                {
+                    "def": "CREATE TRIGGER c_archive AFTER UPDATE OF status ON catalog.layer FOR EACH ROW EXECUTE FUNCTION catalog.layer_archive_cascade()",
+                    "name": "c_archive"
+                },
+                {
+                    "def": "CREATE CONSTRAINT TRIGGER y_published_needs_tileset AFTER INSERT OR UPDATE ON catalog.layer DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION catalog.check_published_has_tileset()",
+                    "name": "y_published_needs_tileset"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "layer_pkey",
+                    "type": "p",
+                    "ref_table": null
+                },
+                {
+                    "def": "UNIQUE (dataset_id, theme_code, lod)",
+                    "name": "layer_dataset_id_theme_code_lod_key",
+                    "type": "u",
+                    "ref_table": null
+                },
+                {
+                    "def": "FOREIGN KEY (dataset_id) REFERENCES catalog.dataset(id)",
+                    "name": "layer_dataset_id_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.dataset"
+                },
+                {
+                    "def": "FOREIGN KEY (theme_code) REFERENCES catalog.ref_theme(code)",
+                    "name": "layer_theme_code_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.ref_theme"
+                },
+                {
+                    "def": "FOREIGN KEY (lod) REFERENCES catalog.ref_lod_level(lod)",
+                    "name": "layer_lod_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.ref_lod_level"
+                },
+                {
+                    "def": "FOREIGN KEY (status) REFERENCES catalog.ref_layer_status(code)",
+                    "name": "layer_status_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.ref_layer_status"
+                },
+                {
+                    "def": "FOREIGN KEY (validated_by_job_id) REFERENCES catalog.import_job(id)",
+                    "name": "layer_validated_by_job_id_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.import_job"
+                },
+                {
+                    "def": "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+                    "name": "y_published_needs_tileset",
+                    "type": "t",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "ref_generated_by",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                }
+            ],
+            "comment": "Who produced the data: an external provider, NARAGA, or manual work.",
+            "indexes": [
+                "CREATE UNIQUE INDEX ref_generated_by_pkey ON catalog.ref_generated_by USING btree (code)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.ref_generated_by FOR EACH ROW EXECUTE FUNCTION audit.log_change('code')",
+                    "name": "z_audit"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((code ~ '^[a-z0-9_]+$'::text))",
+                    "name": "ref_generated_by_code_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "PRIMARY KEY (code)",
+                    "name": "ref_generated_by_pkey",
+                    "type": "p",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "ref_layer_status",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "sort",
+                    "type": "integer",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                }
+            ],
+            "comment": "Lifecycle of a layer. Allowed moves are enforced by the database.",
+            "indexes": [
+                "CREATE UNIQUE INDEX ref_layer_status_pkey ON catalog.ref_layer_status USING btree (code)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.ref_layer_status FOR EACH ROW EXECUTE FUNCTION audit.log_change('code')",
+                    "name": "z_audit"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (code)",
+                    "name": "ref_layer_status_pkey",
+                    "type": "p",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "ref_lod_level",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "lod",
+                    "type": "smallint",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                }
+            ],
+            "comment": "Level of Detail per CityGML 2.0 (0 = footprint/terrain ... 4 = interior).",
+            "indexes": [
+                "CREATE UNIQUE INDEX ref_lod_level_pkey ON catalog.ref_lod_level USING btree (lod)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.ref_lod_level FOR EACH ROW EXECUTE FUNCTION audit.log_change('lod')",
+                    "name": "z_audit"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK (((lod >= 0) AND (lod <= 4)))",
+                    "name": "ref_lod_level_lod_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "PRIMARY KEY (lod)",
+                    "name": "ref_lod_level_pkey",
+                    "type": "p",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "ref_theme",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "code",
+                    "type": "text",
+                    "comment": "Short lowercase code, used in the lineage tag (dataset.theme.lodN). Do not change after use.",
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "citydb_objectclass_hint",
+                    "type": "text[]",
+                    "comment": "Typical 3DCityDB class names for this theme (documentation only).",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "sort",
+                    "type": "integer",
+                    "comment": null,
+                    "default": "100",
+                    "not_null": true
+                }
+            ],
+            "comment": "Subject of a layer: building, bridge, road, terrain ... Add a row to support a new theme.",
+            "indexes": [
+                "CREATE UNIQUE INDEX ref_theme_pkey ON catalog.ref_theme USING btree (code)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.ref_theme FOR EACH ROW EXECUTE FUNCTION audit.log_change('code')",
+                    "name": "z_audit"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((code ~ '^[a-z0-9_]+$'::text))",
+                    "name": "ref_theme_code_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "PRIMARY KEY (code)",
+                    "name": "ref_theme_pkey",
+                    "type": "p",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "ref_tileset_status",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "description",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "sort",
+                    "type": "integer",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                }
+            ],
+            "comment": "Lifecycle of one 3D Tiles build.",
+            "indexes": [
+                "CREATE UNIQUE INDEX ref_tileset_status_pkey ON catalog.ref_tileset_status USING btree (code)"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.ref_tileset_status FOR EACH ROW EXECUTE FUNCTION audit.log_change('code')",
+                    "name": "z_audit"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "PRIMARY KEY (code)",
+                    "name": "ref_tileset_status_pkey",
+                    "type": "p",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "table",
+            "name": "tileset",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": "gen_random_uuid()",
+                    "not_null": true
+                },
+                {
+                    "name": "layer_id",
+                    "type": "uuid",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "version",
+                    "type": "integer",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "provider",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": true
+                },
+                {
+                    "name": "ion_asset_id",
+                    "type": "bigint",
+                    "comment": "Cesium ion asset number (required when provider is cesium_ion).",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "url",
+                    "type": "text",
+                    "comment": "tileset.json address (required when provider is self_hosted).",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "converter_name",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "converter_version",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "source_snapshot_at",
+                    "type": "timestamp with time zone",
+                    "comment": "Data state used for this build. If the data changed later, the layer shows as stale.",
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "height_offset_m",
+                    "type": "numeric",
+                    "comment": "Vertical shift (metres) applied so buildings sit on the terrain.",
+                    "default": "0",
+                    "not_null": true
+                },
+                {
+                    "name": "status",
+                    "type": "text",
+                    "comment": null,
+                    "default": "'building'::text",
+                    "not_null": true
+                },
+                {
+                    "name": "is_active",
+                    "type": "boolean",
+                    "comment": "The one build currently served. Only a Ready tileset can be active.",
+                    "default": "false",
+                    "not_null": true
+                },
+                {
+                    "name": "published_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "created_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "''::text",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp with time zone",
+                    "comment": null,
+                    "default": "now()",
+                    "not_null": true
+                },
+                {
+                    "name": "updated_by",
+                    "type": "text",
+                    "comment": null,
+                    "default": "''::text",
+                    "not_null": true
+                }
+            ],
+            "comment": "One 3D Tiles build of a layer. Only the active one is served.",
+            "indexes": [
+                "CREATE UNIQUE INDEX tileset_pkey ON catalog.tileset USING btree (id)",
+                "CREATE UNIQUE INDEX tileset_layer_id_version_key ON catalog.tileset USING btree (layer_id, version)",
+                "CREATE INDEX tileset_one_active_per_layer ON catalog.tileset USING btree (layer_id) WHERE is_active"
+            ],
+            "triggers": [
+                {
+                    "def": "CREATE TRIGGER a_stamp BEFORE INSERT OR UPDATE ON catalog.tileset FOR EACH ROW EXECUTE FUNCTION catalog.stamp()",
+                    "name": "a_stamp"
+                },
+                {
+                    "def": "CREATE TRIGGER z_audit AFTER INSERT OR DELETE OR UPDATE ON catalog.tileset FOR EACH ROW EXECUTE FUNCTION audit.log_change('id')",
+                    "name": "z_audit"
+                },
+                {
+                    "def": "CREATE TRIGGER b_guard BEFORE INSERT OR UPDATE ON catalog.tileset FOR EACH ROW EXECUTE FUNCTION catalog.tileset_guard()",
+                    "name": "b_guard"
+                },
+                {
+                    "def": "CREATE CONSTRAINT TRIGGER y_published_needs_tileset AFTER INSERT OR DELETE OR UPDATE ON catalog.tileset DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION catalog.check_published_has_tileset()",
+                    "name": "y_published_needs_tileset"
+                }
+            ],
+            "constraints": [
+                {
+                    "def": "CHECK ((version > 0))",
+                    "name": "tileset_version_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "CHECK ((provider = ANY (ARRAY['cesium_ion'::text, 'self_hosted'::text])))",
+                    "name": "tileset_provider_check",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "CHECK ((((provider = 'cesium_ion'::text) AND (ion_asset_id IS NOT NULL)) OR ((provider = 'self_hosted'::text) AND (url IS NOT NULL))))",
+                    "name": "tileset_provider_ck",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "CHECK (((NOT is_active) OR (status = 'ready'::text)))",
+                    "name": "tileset_active_needs_ready_ck",
+                    "type": "c",
+                    "ref_table": null
+                },
+                {
+                    "def": "PRIMARY KEY (id)",
+                    "name": "tileset_pkey",
+                    "type": "p",
+                    "ref_table": null
+                },
+                {
+                    "def": "UNIQUE (layer_id, version)",
+                    "name": "tileset_layer_id_version_key",
+                    "type": "u",
+                    "ref_table": null
+                },
+                {
+                    "def": "EXCLUDE USING btree (layer_id WITH =) WHERE (is_active) DEFERRABLE INITIALLY DEFERRED",
+                    "name": "tileset_one_active_per_layer",
+                    "type": "x",
+                    "ref_table": null
+                },
+                {
+                    "def": "FOREIGN KEY (layer_id) REFERENCES catalog.layer(id)",
+                    "name": "tileset_layer_id_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.layer"
+                },
+                {
+                    "def": "FOREIGN KEY (status) REFERENCES catalog.ref_tileset_status(code)",
+                    "name": "tileset_status_fkey",
+                    "type": "f",
+                    "ref_table": "catalog.ref_tileset_status"
+                },
+                {
+                    "def": "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+                    "name": "y_published_needs_tileset",
+                    "type": "t",
+                    "ref_table": null
+                }
+            ]
+        },
+        {
+            "kind": "materialized view",
+            "name": "layer_feature_stats",
+            "schema": "catalog",
+            "columns": [
+                {
+                    "name": "lineage",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "dataset_code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "theme_code",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "classname",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "is_toplevel",
+                    "type": "boolean",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "lod",
+                    "type": "text",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                },
+                {
+                    "name": "feature_count",
+                    "type": "bigint",
+                    "comment": null,
+                    "default": null,
+                    "not_null": false
+                }
+            ],
+            "comment": "Number of 3D objects per dataset tag, class and LOD. Refreshed after each import.",
+            "indexes": [
+                "CREATE UNIQUE INDEX layer_feature_stats_uq ON catalog.layer_feature_stats USING btree (lineage, classname, lod)"
+            ],
+            "triggers": null,
+            "constraints": null
+        }
+    ],
+    "versions": {
+        "citydb": "(5.1.4,5,1,4)",
+        "postgis": "3.4.3",
+        "postgres": "PostgreSQL 16.4 (Debian 16.4-1.pgdg110+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 10.2.1-6) 10.2.1 20210110, 64-bit"
+    },
+    "functions": [
+        {
+            "args": "",
+            "name": "current_app_user",
+            "schema": "audit",
+            "comment": null,
+            "returns": "text",
+            "security_definer": false
+        },
+        {
+            "args": "",
+            "name": "log_change",
+            "schema": "audit",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": true
+        },
+        {
+            "args": "",
+            "name": "check_published_has_tileset",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": false
+        },
+        {
+            "args": "",
+            "name": "dataset_archive_cascade",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": false
+        },
+        {
+            "args": "",
+            "name": "dataset_guard",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": true
+        },
+        {
+            "args": "",
+            "name": "import_job_guard",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": false
+        },
+        {
+            "args": "",
+            "name": "layer_archive_cascade",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": false
+        },
+        {
+            "args": "",
+            "name": "layer_guard",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": false
+        },
+        {
+            "args": "dataset_code text, theme_code text, lod smallint",
+            "name": "layer_lineage",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "text",
+            "security_definer": false
+        },
+        {
+            "args": "",
+            "name": "refresh_derived",
+            "schema": "catalog",
+            "comment": "Run after an import: refreshes object counts and bounding boxes. Needs a user name (app.user).",
+            "returns": "void",
+            "security_definer": true
+        },
+        {
+            "args": "",
+            "name": "stamp",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": false
+        },
+        {
+            "args": "",
+            "name": "tileset_guard",
+            "schema": "catalog",
+            "comment": null,
+            "returns": "trigger",
+            "security_definer": false
+        }
+    ]
+}

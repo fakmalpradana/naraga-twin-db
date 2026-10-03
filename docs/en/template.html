@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>$title$</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+@page { size: A4; margin: 18mm 16mm 20mm 16mm;
+  @bottom-left { content: "$short$"; font: 8pt Inter, sans-serif; color: #6b7280; }
+  @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8pt Inter, sans-serif; color: #6b7280; } }
+@page :first { @bottom-left { content: none; } @bottom-right { content: none; } }
+:root { --ink:#111827; --muted:#4b5563; --line:#e5e7eb; --accent:#0f766e; --soft:#f0fdfa; }
+html { font: 10pt/1.55 Inter, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+body { margin: 0; }
+.cover { height: 240mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+.cover .kicker { color: var(--accent); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: 10pt; }
+.cover h1 { font-size: 30pt; line-height: 1.15; margin: 8mm 0 4mm; border: 0; page-break-before: avoid; break-before: avoid; color: var(--ink); }
+.cover .sub { font-size: 13pt; color: var(--muted); max-width: 150mm; }
+.cover table { margin-top: 18mm; width: auto; font-size: 9.5pt; }
+.cover td { border: 0; padding: 1.5mm 8mm 1.5mm 0; }
+.cover td:first-child { color: var(--muted); }
+nav#TOC { page-break-after: always; }
+nav#TOC > ul { padding-left: 0; } nav#TOC ul { list-style: none; } nav#TOC li { margin: 1.2mm 0; }
+nav#TOC a { color: var(--ink); text-decoration: none; }
+nav#TOC > ul > li > a { font-weight: 600; }
+h1 { font-size: 18pt; color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: 2mm; margin-top: 0; page-break-before: always; }
+h2 { font-size: 13pt; margin-top: 7mm; } h3 { font-size: 11pt; margin-top: 5mm; }
+h2, h3 { page-break-after: avoid; }
+p, li { orphans: 3; widows: 3; }
+table { border-collapse: collapse; width: 100%; margin: 3mm 0 4mm; font-size: 8.8pt; page-break-inside: auto; }
+tr { page-break-inside: avoid; }
+th { background: var(--soft); color: #134e4a; text-align: left; font-weight: 600; }
+th, td { border: 1px solid var(--line); padding: 1.4mm 2mm; vertical-align: top; }
+code { font: 8.6pt "JetBrains Mono", monospace; background: #f3f4f6; padding: 0 1mm; border-radius: 2px; }
+pre { background: #f8fafc; border: 1px solid var(--line); padding: 3mm; font-size: 8.4pt; white-space: pre-wrap; page-break-inside: avoid; }
+pre code { background: none; padding: 0; }
+pre.mermaid { background: none; border: 0; text-align: center; padding: 0; }
+pre.mermaid svg { max-width: 100%; height: auto; max-height: 185mm; }
+blockquote { margin: 3mm 0; padding: 2mm 4mm; border-left: 3px solid var(--accent); background: var(--soft); color: #134e4a; }
+.figure-note { text-align: center; color: var(--muted); font-size: 8.5pt; margin-top: -2mm; }
+a { color: var(--accent); }
+</style></head>
+<body>
+<section class="cover">
+  <div class="kicker">$kicker$</div>
+  <h1>$title$</h1>
+  <div class="sub">$subtitle$</div>
+  <table>
+    <tr><td>Project</td><td>Digital Twin Catalog (NARAGA 3D Catalog), reusable 3DCityDB template</td></tr>
+    <tr><td>Document</td><td>$short$</td></tr>
+    <tr><td>Version</td><td>0.1 draft for review, 4 October 2026</td></tr>
+    <tr><td>Author</td><td>Fairuz Akmal Pradana</td></tr>
+    <tr><td>Repository</td><td>github.com/fakmalpradana/naraga-twin-db</td></tr>
+  </table>
+</section>
+<nav id="TOC"><h2>Contents</h2>$toc$</nav>
+$body$
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+document.querySelectorAll('pre.mermaid').forEach(p => { p.textContent = p.textContent; });
+mermaid.initialize({ startOnLoad: false, theme: 'base', securityLevel: 'loose',
+  themeVariables: { fontFamily: 'Inter, sans-serif', fontSize: '16px', primaryColor: '#f0fdfa',
+    primaryBorderColor: '#0f766e', primaryTextColor: '#111827', lineColor: '#6b7280', tertiaryColor: '#f9fafb' },
+  er: { useMaxWidth: true, layoutDirection: 'LR', fontSize: 14, minEntityWidth: 140, entityPadding: 14 }, flowchart: { useMaxWidth: true, curve: 'basis', nodeSpacing: 40, rankSpacing: 50, padding: 12 }, sequence: { useMaxWidth: true, actorMargin: 40, messageFontSize: 14, noteFontSize: 13 } });
+// ukur teks setelah font web siap, agar label tidak terpotong
+document.fonts.ready.then(() => mermaid.run({ querySelector: 'pre.mermaid' })).then(() => { document.body.dataset.ready = '1'; });
+</script>
+</body></html>
