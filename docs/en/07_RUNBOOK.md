@@ -2,7 +2,9 @@
 
 Day-to-day procedures. Commands were run against the local Docker stack on 3 and 4 October 2026 unless marked *not yet run*. citydb-tool is 1.4.0 and flag names were checked with `--help`.
 
-# Import a CityGML file
+# Import a CityGML or CityJSON file
+
+`scripts/import.sh` picks the importer from the file extension: `.json` (CityJSON 2.0) uses `citydb import cityjson`, anything else uses `citydb import citygml`. CityJSON import was run on 8 October 2026 with the KIPP LOD1 file (389 buildings).
 
 ```bash
 scripts/import.sh USER=fairuz FILE=/path/oikn_lod1.gml DATASET=oikn THEME=building LOD=1
@@ -46,7 +48,16 @@ A published layer stays published after a re-import but shows **stale** until th
 
 Sample test run on 4 October 2026 with a synthetic CityGML 2.0 file (one building with `lod1Solid`, one room with `lod4Solid`, 12 polygons, 2 generic attributes, 1 name): import, then `citydb export citygml -v 2.0`. Counts of buildings, rooms, `lod1Solid`, `lod4Solid`, polygons, attributes and names were identical (**pass**). A real LOD4 sample from the provider is still needed to close this check. Compare counts and area or volume, not file text.
 
-# Publish a tileset
+# Build and publish a self-hosted tileset
+
+```bash
+python3 scripts/build_tiles.py data/KIPP_LOD1.obj tiles/oikn/building/lod1/v1
+scripts/publish_tiles.sh USER=fairuz DATASET=oikn THEME=building LOD=1 VERSION=1   # DRY=1 to check only
+```
+
+`publish_tiles.sh` inserts the tileset (ready), retires the previously active one and activates the new one in one transaction, and publishes a `validated` layer. See the README, section 6, for update, add and delete flows.
+
+# Publish a tileset (Cesium ion)
 
 1. Convert with convertwin and upload to Cesium ion.
 2. Add a `tileset` row (admin UI): provider `cesium_ion`, `ion_asset_id`, `source_snapshot_at`, `height_offset_m`, status `ready`.

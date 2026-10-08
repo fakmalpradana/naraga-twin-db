@@ -1,22 +1,331 @@
-# Digital Twin Catalog (NARAGA 3D Catalog) — template
+# NARAGA 3D Catalog
 
-A reusable database and catalog for 3D city models (3DCityDB v5 + PostGIS), with an API for a Cesium frontend and an admin web page for non-IT users.
+A reusable catalog and serving stack for 3D city models. It stores CityGML/CityJSON data in **3DCityDB v5 (PostGIS)**, keeps a **catalog** of datasets, layers and 3D Tiles builds, and exposes a read-only **REST API** plus a self-hosted **3D Tiles** endpoint for a Cesium frontend. Non-IT staff manage the catalog through a Django admin.
 
-**Status: design phase.** Read in this order: [DDD](docs/en/01_DDD.md) → [ERD](docs/en/02_ERD.md) → [Database schema](docs/en/03_DATABASE_SCHEMA.md) → [SAD](docs/en/04_SAD.md) → [API](docs/en/05_API.md) → [Deployment](docs/en/06_DEPLOYMENT.md) → [Runbook](docs/en/07_RUNBOOK.md). Readable PDFs with rendered diagrams are in `docs/pdf/`; rebuild with `python3 docs/en/build.py` (needs pandoc, Chrome, poppler)..
+**Current data:** dataset `oikn`, theme `building`, LOD1 — 389 buildings (KIPP), published, tileset v1 (self-hosted).
 
-## For data editors (non-IT)
-- Sign in at `/admin` with your own account (never share accounts).
-- **Datasets / Layers / Tilesets / Import jobs** show everything that exists and what was uploaded. Use filters and search; "History" on a record shows who changed what.
-- Every change is recorded with your name. You cannot delete; ask an admin to archive instead.
-- Do not edit `Code` of a dataset after data was loaded (the system will refuse).
-- Bounding boxes and object counts are filled automatically; do not type them.
+---
 
-## Layout
-`docs/en/` Markdown sources, `docs/pdf/` PDFs · `db/migrations/` SQL (dbmate) · `db/seeds/<project>/` project data · `db/tests/` checks · (later) `api/`, `viewer/`, `client/`, `postman/`.
+## Contents
 
-## Test the database design now
-```bash
-docker run -d --name twindb-scratch -e POSTGRES_PASSWORD=scratch -e SRID=32750 -e HEIGHT_EPSG=4979 -p 55432:5432 3dcitydb/3dcitydb-pg:16-3.4-5.1.4
-dbmate --url "postgres://postgres:scratch@localhost:55432/postgres?sslmode=disable" up
-psql "postgres://postgres:scratch@localhost:55432/postgres" -v ON_ERROR_STOP=1 -f db/tests/invariants.sql
+1. [Architecture](#1-architecture)
+2. [Quick start](#2-quick-start)
+3. [Configuration](#3-configuration)
+4. [For frontend developers](#4-for-frontend-developers)
+5. [API reference](#5-api-reference)
+6. [Data operations (import, tiles, update, delete)](#6-data-operations)
+7. [For backend developers](#7-for-backend-developers)
+8. [Deployment](#8-deployment)
+9. [Repository layout](#9-repository-layout)
+10. [Known limitations and open items](#10-known-limitations-and-open-items)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Further documentation](#12-further-documentation)
+
+---
+
+## 1. Architecture
+
 ```
+ source file ──import.sh──► 3DCityDB  (schema citydb)      geometry + attributes
+ (.city.json / .gml)              │
+                                  │  catalog.* (datasets, layers, import jobs, tilesets)
+ OBJ ──build_tiles.py──► tiles/…/vN/tileset.json + .glb
+                                  │   publish_tiles.sh registers the build in catalog.tileset
+                                  ▼
+   Frontend ── GET /api/v1/catalog ──► API ──► catalog.v_layer ──► layer + tileset.url
+   Frontend ── Cesium3DTileset.fromUrl(url) ──► GET /tiles/…       (served by the API)
+   Frontend ── click a building ──► GET /api/v1/features/{objectid} ──► attributes from citydb
+```
+
+Key design points:
+
+- **The database does not store tiles.** It stores the model (`citydb.*`) and a *pointer* to each tile build (`catalog.tileset`). Tiles are produced by a separate step and served as static files (or by Cesium ion).
+- **Tile ↔ database link.** Every building inside a tile carries its `objectid` (the CityGML `gml:id`, e.g. `KIPP_0287`) as a feature property. The frontend reads it on click and calls `/features/{objectid}`.
+- **Layer lifecycle is enforced by the database:** `draft → validated → published → archived`. A layer cannot be `published` without exactly one *active, ready* tileset, and a layer cannot be `validated` unless an import job succeeded and passed validation.
+- **Versioned tiles.** Each rebuild is a new version (`v1`, `v2`, …). Activating a new version retires the old one in one transaction, so there is no downtime.
+- **Traceability.** Every import is an `import_job` row (file name, SHA-256, size, user, counts). Every change to catalog tables is audited with the signed-in user's name.
+
+| Component | Technology |
+|---|---|
+| Database | PostgreSQL 16 + PostGIS, 3DCityDB 5.1.4 (`3dcitydb/3dcitydb-pg:16-3.4-5.1.4`) |
+| Importer | `citydb-tool` 1.4.0 (Docker) |
+| API + admin | Django 5 + django-ninja, gunicorn |
+| Migrations | dbmate (`db/migrations/`) |
+| Frontend client | Dependency-free ES module (`client/naraga-catalog.js`) + CesiumJS 1.130 |
+
+## 2. Quick start
+
+**Prerequisites:** Docker Desktop (running), `psql` optional. For the tile scripts: Python 3.10+ with `numpy`, `pyproj`, `pygltflib`.
+
+```bash
+cp .env.example .env        # then change the passwords
+make up                     # builds and starts db + api (migrations, roles, seeds run automatically)
+curl localhost:8000/api/v1/health
+```
+
+| What | Where |
+|---|---|
+| Viewer | <http://localhost:8000/viewer/> |
+| Admin | <http://localhost:8000/admin/> (user and password from `.env`) |
+| Interactive API docs (OpenAPI) | <http://localhost:8000/api/v1/docs> |
+| Tiles | `http://localhost:8000/tiles/…` |
+| Postgres | `localhost:55432`, user `postgres` |
+
+```bash
+make down      # stop (data stays in the pgdata volume)
+make psql      # SQL shell
+make test      # database invariants + API tests
+```
+
+> **Never run `docker compose down -v`.** It deletes the database volume. The coordinate system (`CITYDB_SRID`) is fixed when the volume is first created.
+
+Then open the viewer, choose `oikn` → `building` → `1` → **Load layer**, and click a building.
+
+## 3. Configuration
+
+All settings come from environment variables (`.env` locally, service variables on Railway). `.env.example` is the template.
+
+| Variable | Purpose |
+|---|---|
+| `POSTGRES_PASSWORD`, `DATABASE_URL` | Database owner connection (migrations, imports) |
+| `CITYDB_SRID`, `CITYDB_HEIGHT_EPSG` | Model CRS, e.g. `32750` / `4979`. **Fixed at first start of the volume.** |
+| `APP_DB_PASSWORD`, `API_DB_PASSWORD` | Passwords of the login roles `twin_app` (admin) and `twin_api` (read-only API) |
+| `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS` | Django |
+| `ALLOWED_ORIGINS` | Comma-separated origins allowed to call `/api/` **and `/tiles/`** from a browser (CORS). Same-origin needs nothing. |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | First admin account (created on start) |
+| `ADMIN_EDIT_ENABLED` | `0` = read-only admin, `1` = editing enabled |
+| `PROJECT` | Seed folder under `db/seeds/` (default `oikn`) |
+
+## 4. For frontend developers
+
+You only need the HTTP API. No database access, no token for the API (a Cesium ion token is needed only for ion-hosted tilesets or ion base maps).
+
+### 4.1 Load a layer
+
+```js
+import { createClient } from "/client/naraga-catalog.js";   // or copy the file into your app
+
+const client = createClient("http://localhost:8000");        // API origin
+const { layer, tileset } = await client.loadTileset(viewer, { dataset: "oikn", theme: "building", lod: 1 });
+viewer.zoomTo(tileset);
+
+// click a building -> attributes from the database
+client.enablePicking(viewer, (feature, error) => console.log(feature ?? error));
+```
+
+### 4.2 Without the client library
+
+```js
+const res = await fetch("http://localhost:8000/api/v1/catalog?dataset=oikn&theme=building&lod=1");
+const { items } = await res.json();
+const t = items[0].tileset;                                   // null if the layer has no active tileset
+const tileset = t.provider === "cesium_ion"
+  ? await Cesium.Cesium3DTileset.fromIonAssetId(t.ionAssetId)
+  : await Cesium.Cesium3DTileset.fromUrl(t.url);              // absolute URL, ready to use
+viewer.scene.primitives.add(tileset);
+
+// on click:
+const picked = viewer.scene.pick(click.position);
+const objectId = picked?.getProperty?.("objectid");           // e.g. "KIPP_0287"
+const attrs = await (await fetch(`http://localhost:8000/api/v1/features/${objectId}`)).json();
+```
+
+### 4.3 Things to handle
+
+- **`tileset` can be `null`** (layer not published yet). The default `/catalog` call returns only `published` layers; use `status=all` for everything.
+- **`isStale: true`** means data changed in the database after the tiles were built. Show a warning; tiles need a rebuild.
+- **`heightOffsetM`** is a vertical shift in metres. The client applies it automatically; apply it yourself if you load the tileset manually.
+- **Vertical datum** of the current data is `unknown` (see [open items](#10-known-limitations-and-open-items)). Buildings may appear to float or sink relative to terrain until it is resolved.
+- **CORS:** if your app runs on another origin, add it to `ALLOWED_ORIGINS`.
+- **Errors** share one format: `{"error": {"code", "message", "details"}}`.
+
+## 5. API reference
+
+Base path `/api/v1`, read-only, JSON. Live OpenAPI: `/api/v1/openapi.json` and `/api/v1/docs`. A Postman collection is in `postman/`.
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Service and database status |
+| `GET /catalog` | Layers with their active tileset. Filters: `dataset`, `theme`, `lod` (0–4), `bbox` (`minlon,minlat,maxlon,maxlat`, EPSG:4326), `status` (default `published`, or `all`), `limit` (≤500, default 50), `offset` |
+| `GET /layers/{layerId}/tileset` | Active tileset of one layer (404 if none) |
+| `GET /datasets`, `GET /datasets/{code}` | Datasets and their layers |
+| `GET /datasets/{code}/stats` | Object counts per class and LOD |
+| `GET /features/{objectid}` | Attributes of one city object (class, dataset, lineage, LODs available, attributes) |
+| `GET /features` | Search. Filters: `dataset`, `bbox`, `q` (name), `limit`, `offset`. Returns GeoJSON of envelope footprints |
+| `GET /tiles/{path}` | Static tile files (`tileset.json`, `.glb`). Not part of `/api/v1`. |
+
+Example `/catalog` item:
+
+```json
+{
+  "layerId": "ec5f6a15-5850-4f44-903c-dab494370892",
+  "title": "OIKN buildings LOD1",
+  "dataset": {"code": "oikn", "name": "OIKN", "generatedBy": "external", "attribution": null, "verticalDatum": "unknown"},
+  "theme": "building", "lod": 1, "status": "published", "featureCount": 389, "isStale": false,
+  "bbox": [116.696, -0.987, 116.722, -0.958],
+  "tileset": {"id": "…", "version": 1, "provider": "self_hosted", "ionAssetId": null,
+              "url": "http://localhost:8000/tiles/oikn/building/lod1/v1/tileset.json",
+              "heightOffsetM": 0.0, "publishedAt": "2026-10-08T21:39:06+00:00"}
+}
+```
+
+The database stores self-hosted tileset URLs as relative paths (`/tiles/…`); the API returns them as absolute URLs for the host that answered the request, so moving hosts needs no data change.
+
+## 6. Data operations
+
+Rule of thumb: **database first, then tiles, then register the new tileset version.**
+
+Scripts (all run from the repository root, local Docker stack):
+
+| Script | Purpose |
+|---|---|
+| `scripts/import.sh` | Import a CityGML 2.0 (`.gml`/`.xml`) or CityJSON 2.0 (`.json`) file with an import job and lineage tag `<dataset>.<theme>.lod<N>` |
+| `scripts/build_tiles.py` | Build a 3D Tiles 1.1 tileset from an OBJ, storing each building's `objectid` |
+| `scripts/publish_tiles.sh` | Register a built tileset version and make it the active one (retires the old one atomically). `DRY=1` checks everything and rolls back |
+
+### 6.1 First-time load of a new layer
+
+```bash
+# 1. Import (creates the draft layer and an import job)
+scripts/import.sh USER=yourname FILE=data/KIPP_LOD1.city.json DATASET=oikn THEME=building LOD=1
+
+# 2. Validate the source geometry (val3dity recommended), then mark the job and layer.
+#    SQL is in docs/en/07_RUNBOOK.md ("Validate and mark the layer validated").
+
+# 3. Build tiles. Object names in the OBJ ("o KIPP_0000") MUST equal the objectid/gml:id in the database.
+python3 scripts/build_tiles.py data/KIPP_LOD1.obj tiles/oikn/building/lod1/v1
+
+# 4. Register and publish
+scripts/publish_tiles.sh USER=yourname DATASET=oikn THEME=building LOD=1 VERSION=1
+```
+
+The OBJ header carries the offset to the model CRS (`# offset X=… Y=… Z=…`). `build_tiles.py` reads it, reprojects to ECEF and writes a single-tile tileset (suitable for a few thousand buildings; see [limitations](#10-known-limitations-and-open-items)).
+
+### 6.2 Replace all data of a layer
+
+```bash
+NET=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' $(docker compose ps -q db))
+
+# a. remove the old objects by lineage
+docker run --rm --platform linux/amd64 --network "$NET" 3dcitydb/citydb-tool:1.4.0 delete \
+  -H db -d postgres -u postgres -p "$POSTGRES_PASSWORD" --delete-mode=delete -f "lineage = 'oikn.building.lod1'"
+
+# b. import the new file, c. build tiles as the next version, d. publish it
+scripts/import.sh USER=yourname FILE=data/new/KIPP_LOD1.city.json DATASET=oikn THEME=building LOD=1
+python3 scripts/build_tiles.py data/new/KIPP_LOD1.obj tiles/oikn/building/lod1/v2
+scripts/publish_tiles.sh USER=yourname DATASET=oikn THEME=building LOD=1 VERSION=2
+```
+
+A published layer stays published during a re-import and shows `isStale: true` until the new tileset is activated.
+
+### 6.3 Add buildings
+
+Import the additional file with `MODE=skip` (objects whose id already exists are skipped), then rebuild tiles from the **complete** OBJ and publish the next version. A tileset is always a complete build; it is not patched.
+
+```bash
+scripts/import.sh USER=yourname FILE=data/extra.city.json DATASET=oikn THEME=building LOD=1 MODE=skip
+```
+
+### 6.4 Delete buildings or a layer
+
+```bash
+# specific buildings
+docker run --rm --platform linux/amd64 --network "$NET" 3dcitydb/citydb-tool:1.4.0 delete \
+  -H db -d postgres -u postgres -p "$POSTGRES_PASSWORD" --delete-mode=delete -f "objectid = 'KIPP_0287'"
+```
+
+Then rebuild tiles without those buildings and publish the next version. To retire a whole layer, set it to `archived` in the admin (its tilesets are retired automatically); delete the objects by lineage if the data must go as well.
+
+> `MODE=skip` and delete-by-`objectid` have **not been tested** in this repository yet. Delete-by-lineage and full import are tested. Try them on a small file first and compare `/datasets/{code}/stats`.
+
+### 6.5 Adjust height
+
+If buildings float or sink, register a new version with an offset (no tile rebuild needed), or edit `height_offset_m` in the admin:
+
+```bash
+scripts/publish_tiles.sh USER=yourname DATASET=oikn THEME=building LOD=1 VERSION=3 HEIGHT_OFFSET=-25
+```
+
+### 6.6 Verify after any change
+
+```bash
+curl -s localhost:8000/api/v1/datasets/oikn/stats
+curl -s "localhost:8000/api/v1/catalog?dataset=oikn&lod=1" | python3 -m json.tool   # status, isStale, tileset
+```
+
+Then load the layer in the viewer and click a building.
+
+### 6.7 Cesium ion instead of self-hosting
+
+Register a tileset with provider `cesium_ion` and an `ion_asset_id` through the admin; the same API and client work unchanged. See the runbook ("Publish a tileset").
+
+## 7. For backend developers
+
+- **Schema changes** go through dbmate migrations in `db/migrations/` (forward-only; `dbmate down` only for the latest migration before data depends on it). The API container runs `dbmate up` on every start.
+- **Business rules live in the database** (`db/migrations/…_business_rules.sql`): status transitions, "published needs an active ready tileset", one active tileset per layer, audit stamping. Add rules there, not only in Python. Checks are in `db/tests/invariants.sql`.
+- **Database roles:** `twin_api` is read-only and used by the public API; `twin_app` is used by the admin. Every admin write runs in a transaction with `app.user` set; writes with an empty user are rejected.
+- **API code:** `api/catalog/api.py` (endpoints), `api/catalog/admin.py` (admin), `api/catalog/middleware.py` (CORS, audit user), `api/config/urls.py` (routes, including `/tiles/` and `/viewer/`).
+- **Tests:** `make test` (database invariants + pytest). Postman: `newman run postman/naraga-catalog.postman_collection.json -e postman/local.postman_environment.json`. Do not run the tests against a production database.
+- **Adding a project:** copy the repository, set `.env` (SRID, `PROJECT`), add `db/seeds/<project>/`. Add themes via `ref_theme` in the admin.
+- **Tile format:** `build_tiles.py` writes glTF with `EXT_mesh_features` and `EXT_structural_metadata` (property `objectid`, STRING). Any other converter is acceptable if each building exposes `objectid` (the client also tries `gml_id`, `gmlId`, `id`, `name`).
+
+## 8. Deployment
+
+Step-by-step Railway procedure: [`docs/en/08_RAILWAY_GUIDE.md`](docs/en/08_RAILWAY_GUIDE.md). Overview: [`docs/en/06_DEPLOYMENT.md`](docs/en/06_DEPLOYMENT.md).
+
+Self-hosted tiles need persistent storage in production. Options: mount a Railway Volume at `/srv/tiles`; add `COPY tiles tiles` to `api/Dockerfile` (the current tileset is about 4 MB); or use Cesium ion. The `tiles/` folder is mounted from the host in `docker-compose.yml` for local use and is not baked into the image.
+
+Backups: `deploy/backup/backup.sh` (nightly `pg_dump -Fc`, optional S3 upload). Tiles are reproducible from source files; keep the source files.
+
+## 9. Repository layout
+
+```
+api/            Django API + admin (api/catalog), Dockerfile, entrypoint
+client/         naraga-catalog.js — frontend connector
+viewer/         Reference Cesium viewer served at /viewer/
+db/migrations/  dbmate SQL migrations        db/seeds/<project>/  project seed data
+db/tests/       database invariant checks
+scripts/        import.sh, build_tiles.py, publish_tiles.sh
+tiles/          Built 3D Tiles (git-ignored locally; tiles/<dataset>/<theme>/lod<N>/v<version>/)
+data/           Source data (not committed)
+deploy/         Backup job and db image for Railway
+postman/        API collection and environments
+docs/en/        Design documents, runbook, Railway guide      docs/pdf/  rendered PDFs
+```
+
+## 10. Known limitations and open items
+
+- **Geometry validation:** `val3dity` could not be installed on the development machine. The KIPP LOD1 import job was marked as passed based on a custom check (all 389 solids closed, each edge shared by exactly two faces), recorded in the job report. Run `val3dity` and update the report for an official result.
+- **Vertical datum:** dataset `oikn` has `vertical_datum = unknown` and no attribution. The KIPP heights (ground ≈ 29 m) have no confirmed reference (ellipsoid vs. geoid). The tileset is registered with `heightOffsetM = 0`.
+- **Single-tile tileset:** `build_tiles.py` writes one tile (about 4 MB for 389 buildings). For tens of thousands of buildings use a hierarchical tiler.
+- **LOD1 only.** LOD2 (NARAGA) and LOD4 layers exist as drafts without data.
+- **Untested operations:** `MODE=skip` and delete-by-`objectid` (see section 6).
+- **Self-hosted tile storage in production** is not set up yet (section 8).
+- Admin is read-only by default (`ADMIN_EDIT_ENABLED=0`).
+
+## 11. Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---|---|
+| `Cannot connect to the Docker daemon` | Start Docker Desktop, then `docker compose up -d`. |
+| Viewer shows "no active tileset" | Layer is not `published` or its tileset is not `ready`/active. Check `/api/v1/catalog?status=all`. |
+| Black canvas right after loading | The globe renders a moment later; wait and re-check. Open the browser console for tile errors. |
+| Click on a building says "no id property" | The tiles lack `objectid`. Rebuild with `build_tiles.py`. |
+| Click works but `/features/{id}` returns 404 | Object names in the OBJ differ from `gml:id` in the database. They must be identical. |
+| Buildings float or sink | Vertical datum mismatch. Register a version with `HEIGHT_OFFSET` (section 6.5). |
+| Browser blocks `/api` or `/tiles` | Add the frontend origin to `ALLOWED_ORIGINS` and restart the api service. |
+| `isStale` is true | Database changed after the tiles were built. Rebuild and publish the next version. |
+| Import fails on CRS | Source CRS must equal `CITYDB_SRID`. Reproject first. |
+| `Cannot publish: the layer has no active Ready tileset` | Register a tileset first (`publish_tiles.sh`), then publish. |
+
+## 12. Further documentation
+
+Read in this order for the full design: [DDD](docs/en/01_DDD.md) → [ERD](docs/en/02_ERD.md) → [Database schema](docs/en/03_DATABASE_SCHEMA.md) → [SAD](docs/en/04_SAD.md) → [API](docs/en/05_API.md) → [Deployment](docs/en/06_DEPLOYMENT.md) → [Runbook](docs/en/07_RUNBOOK.md) → [Railway guide](docs/en/08_RAILWAY_GUIDE.md). PDFs with rendered diagrams are in `docs/pdf/`; rebuild with `python3 docs/en/build.py` (needs pandoc, Chrome, poppler). An Indonesian operating guide is in [`docs/PANDUAN_SERVE_UPDATE.md`](docs/PANDUAN_SERVE_UPDATE.md).
+
+### For data editors (non-IT)
+
+- Sign in at `/admin` with your own account; never share accounts.
+- **Datasets, Layers, Tilesets, Import jobs** show everything that exists and what was uploaded. "History" on a record shows who changed what.
+- Every change is recorded with your name. You cannot delete; ask an admin to archive instead.
+- Do not edit the `Code` of a dataset after data was loaded (the system refuses it).
+- Bounding boxes and object counts are filled automatically; do not type them.

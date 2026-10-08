@@ -14,5 +14,6 @@ urlpatterns = [
     path("api/v1/", api.urls),
     path("viewer/", serve, {"document_root": settings.ROOT / "viewer", "path": "index.html"}),
     path("viewer/<path:path>", serve, {"document_root": settings.ROOT / "viewer"}),
+    path("tiles/<path:path>", serve, {"document_root": settings.ROOT / "tiles"}),   # self-hosted 3D Tiles (volume ./tiles)
     path("client/<path:path>", serve, {"document_root": settings.ROOT / "client"}),
 ]

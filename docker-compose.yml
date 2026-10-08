@@ -18,6 +18,7 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-change-me}@db:5432/postgres?sslmode=disable
     depends_on: {db: {condition: service_healthy}}
+    volumes: ["./tiles:/srv/tiles:ro"]   # self-hosted 3D Tiles, served at /tiles/ (update without rebuilding)
     ports: ["${API_PORT:-8000}:8000"]
 volumes:
   pgdata:

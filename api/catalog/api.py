@@ -51,12 +51,12 @@ def parse_bbox(bbox):
     return minx, miny, maxx, maxy
 
 
-def layer_item(r):
+def layer_item(r, base=""):   # base = this server's origin; turns a stored '/tiles/...' path into an absolute URL
     bbox = [float(r[k]) for k in ("bbox_minx", "bbox_miny", "bbox_maxx", "bbox_maxy")] if r["bbox_minx"] is not None else None
     tileset = None
     if r["tileset_id"]:
         tileset = {"id": str(r["tileset_id"]), "version": r["tileset_version"], "provider": r["provider"],
-                   "ionAssetId": r["ion_asset_id"], "url": r["url"], "heightOffsetM": float(r["height_offset_m"]),
+                   "ionAssetId": r["ion_asset_id"], "url": base.rstrip("/") + r["url"] if r["url"] and r["url"].startswith("/") else r["url"], "heightOffsetM": float(r["height_offset_m"]),
                    "publishedAt": r["published_at"].isoformat() if r["published_at"] else None}
     return {"layerId": str(r["layer_id"]), "title": r["title"],
             "dataset": {"code": r["dataset_code"], "name": r["dataset_name"], "generatedBy": r["generated_by"],
@@ -91,7 +91,7 @@ def catalog(request, lod: Optional[int] = Query(None, ge=0, le=4), theme: Option
     w = ("WHERE " + " AND ".join(where)) if where else ""
     total = rows(f"SELECT count(*) AS n FROM catalog.v_layer {w}", p)[0]["n"]
     items = rows(f"SELECT * FROM catalog.v_layer {w} ORDER BY dataset_code, theme_code, lod LIMIT %s OFFSET %s", p + [limit, offset])
-    return {"items": [layer_item(r) for r in items], "limit": limit, "offset": offset, "total": total}
+    return {"items": [layer_item(r, request.build_absolute_uri("/")) for r in items], "limit": limit, "offset": offset, "total": total}
 
 
 @api.get("/layers/{layer_id}/tileset", tags=["catalog"])
@@ -102,7 +102,7 @@ def layer_tileset(request, layer_id: str):
         raise HttpError(422, "layer_id must be a UUID")
     if not r or not r[0]["tileset_id"]:
         raise HttpError(404, "Layer not found or it has no active tileset")
-    return layer_item(r[0])["tileset"]
+    return layer_item(r[0], request.build_absolute_uri("/"))["tileset"]
 
 
 @api.get("/datasets", tags=["datasets"])
