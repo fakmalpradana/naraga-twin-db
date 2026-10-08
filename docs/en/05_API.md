@@ -31,7 +31,9 @@ Catalog item:
 (values illustrative)
 
 # Tile ↔ database link
-Each tile object must carry its `objectid` (gml:id). The frontend reads it on click and calls `/features/{objectid}`. Verified status: **pending** for real tiles (the API side is tested with a fixture feature) (convertwin id preservation is checked on 9 Oct).
+Each tile object must carry its `objectid` (gml:id). The frontend reads it on click and calls `/features/{objectid}`. Verified status: **verified on 8 October 2026** with the real KIPP LOD1 tileset (389 buildings, self-hosted, built by `scripts/build_tiles.py`): the tile exposes `objectid` (e.g. `KIPP_0287`) and `/features/KIPP_0287` returns its attributes. Tiles from other converters (e.g. convertwin) still need this check.
+
+Self-hosted tiles are served at `/tiles/…` (same CORS rule as `/api/`). The database stores their address as a relative path and the API returns an absolute URL for the requesting host.
 
 # Connector deliverables
 - `client/naraga-catalog.js` - ES module, no dependencies: `listLayers({lod})`, `loadTileset(viewer, lod)`, `getFeature(id)`, `enablePicking(viewer)`.
