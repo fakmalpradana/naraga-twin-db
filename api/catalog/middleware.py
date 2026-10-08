@@ -14,7 +14,7 @@ class CorsMiddleware:
             response = HttpResponse(status=204)
         else:
             response = self.get_response(request)
-        if origin and request.path.startswith("/api/") and ("*" in settings.ALLOWED_ORIGINS or origin in settings.ALLOWED_ORIGINS):
+        if origin and request.path.startswith(("/api/", "/tiles/")) and ("*" in settings.ALLOWED_ORIGINS or origin in settings.ALLOWED_ORIGINS):
             response["Access-Control-Allow-Origin"] = origin
             response["Access-Control-Allow-Methods"] = "GET, OPTIONS"
             response["Access-Control-Allow-Headers"] = "Content-Type"

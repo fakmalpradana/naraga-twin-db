@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Import one CityGML 2.0 file into 3DCityDB with traceability (job row, lineage tag, user, counts).
+# Import one CityGML 2.0 or CityJSON 2.0 file into 3DCityDB with traceability (job row, lineage tag, user, counts).
 # Usage: scripts/import.sh USER=name FILE=path/to/file.gml DATASET=oikn THEME=building LOD=1 [MODE=import_all]
 # Local docker compose by default. For a remote database (e.g. Railway TCP proxy) also pass
 #   REMOTE_HOST=<host> REMOTE_PORT=<port> REMOTE_PASSWORD=<postgres password>
@@ -7,6 +7,7 @@ set -euo pipefail
 for kv in "$@"; do export "$kv"; done
 : "${USER:?USER=<your name> is required}" "${FILE:?FILE=... required}" "${DATASET:?}" "${THEME:?}" "${LOD:?}"
 MODE="${MODE:-import_all}"
+case "$FILE" in *.json) FMT=cityjson;; *) FMT=citygml;; esac   # CityJSON (.city.json) or CityGML (.gml/.xml)
 [ -f "$FILE" ] || { echo "file not found: $FILE" >&2; exit 1; }
 cd "$(dirname "$0")/.."
 [ -f .env ] && set -a && . ./.env && set +a
@@ -40,7 +41,7 @@ echo "import job $JOB, lineage $TAG"
 
 set +e
 docker run --rm --platform linux/amd64 "${NET_ARGS[@]}" \
-  -v "$(cd "$(dirname "$FILE")" && pwd)":/data:ro 3dcitydb/citydb-tool:1.4.0 import citygml \
+  -v "$(cd "$(dirname "$FILE")" && pwd)":/data:ro 3dcitydb/citydb-tool:1.4.0 import $FMT \
   "${DB_ARGS[@]}" \
   --lineage "$TAG" --reason-for-update "import_job:$JOB" --updating-person "$USER" -m "$MODE" --compute-extent \
   "/data/$(basename "$FILE")"
