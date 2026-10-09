@@ -1,12 +1,14 @@
-"""Read-only API /api/v1 (django-ninja). Uses the SELECT-only DB alias `ro`; never writes."""
+"""API /api/v1 (django-ninja). Reads use the SELECT-only DB alias `ro`. Writes (POST/PATCH/DELETE on /features, POST /layers/{id}/rebuild)
+are in catalog/edit.py, need a bearer token and keep the served tileset in sync."""
+import uuid
 from typing import Optional
 
 from django.db import connections
-from ninja import NinjaAPI, Query
+from ninja import NinjaAPI, Query, Schema
 from ninja.errors import HttpError, ValidationError
 
 api = NinjaAPI(title="Digital Twin Catalog API", version="1.0", urls_namespace="catalog-api",
-               description="Read-only API: layers and tilesets for the Cesium frontend, plus city object attributes from 3DCityDB.")
+               description="Layers and tilesets for the Cesium frontend, city object attributes from 3DCityDB, and (with a write token) create/update/delete of LOD1 buildings with automatic tile rebuild.")
 
 
 def error(status, code, message, details=None):
@@ -23,7 +25,7 @@ def on_validation(request, exc):
 
 @api.exception_handler(HttpError)
 def on_http(request, exc):
-    codes = {400: "bad_request", 404: "not_found", 409: "ambiguous", 422: "invalid_parameter"}
+    codes = {400: "bad_request", 401: "unauthorized", 404: "not_found", 409: "conflict", 422: "invalid_parameter", 502: "tile_rebuild_failed", 503: "writes_disabled"}
     _, body = error(exc.status_code, codes.get(exc.status_code, "error"), str(exc))
     return api.create_response(request, body, status=exc.status_code)
 
@@ -167,7 +169,12 @@ def feature(request, objectid: str, dataset: Optional[str] = None):
                     ORDER BY name""", [f["id"]])
     lods = rows("SELECT DISTINCT val_lod FROM citydb.property WHERE feature_id = %s AND val_lod IS NOT NULL ORDER BY 1", [f["id"]])
     parts = (f["lineage"] or "").split(".")
-    return {"objectid": f["objectid"], "class": f["classname"],
+    geometry = None                                   # block-model summary, for LOD1 objects with a plain extruded footprint
+    if f["classname"] == "Building" and (f["lineage"] or "").endswith(".lod1"):
+        b = edit.read_building(f["objectid"])
+        if b and b["simple"]:
+            geometry = {"footprint": edit.model_to_lonlat(b["rings"], edit.db_srid()), "baseZ": b["base_z"], "heightM": b["height_m"]}
+    return {"objectid": f["objectid"], "class": f["classname"], "geometry": geometry,
             "dataset": parts[0] or None, "theme": parts[1] if len(parts) > 1 else None, "lineage": f["lineage"],
             "lodsAvailable": [r["val_lod"] for r in lods],
             "attributes": [{"name": a["name"], "value": value_of(a), "uom": a["val_uom"]} for a in attrs],
@@ -200,3 +207,118 @@ def features(request, dataset: Optional[str] = None, bbox: Optional[str] = None,
             "features": [{"type": "Feature", "geometry": json.loads(r["geom"]) if r["geom"] else None,
                           "properties": {"objectid": r["objectid"], "class": r["classname"], "lineage": r["lineage"], "name": r["name"]}}
                          for r in res]}
+
+
+# ---------------------------------------------------------------- write API (token required)
+from typing import Dict, List, Union
+from . import edit
+
+Attr = Union[str, float, int, bool, None]
+
+
+class BuildingIn(Schema):
+    dataset: str
+    theme: str = "building"
+    objectid: Optional[str] = None                 # generated (API_xxxxxxxxxx) when omitted
+    footprint: List[List[float]]                   # outer ring, [lon, lat] points (EPSG:4326)
+    holes: List[List[List[float]]] = []            # optional inner rings
+    height_m: float
+    base_z: Optional[float] = None                 # model height of the ground; default = mean ground of the layer
+    attributes: Dict[str, Attr] = {}
+
+
+class BuildingPatch(Schema):
+    footprint: Optional[List[List[float]]] = None
+    holes: Optional[List[List[List[float]]]] = None
+    height_m: Optional[float] = None
+    base_z: Optional[float] = None
+    attributes: Optional[Dict[str, Attr]] = None   # merged into the existing ones; a null value removes that attribute
+
+
+def _check_height(h):
+    if not (0 < h <= 1000): raise HttpError(422, "height_m must be between 0 and 1000")
+
+
+@api.post("/features", tags=["edit"], auth=edit.require_writer, summary="Create a LOD1 building (token required)", response={201: dict})
+def create_feature(request, body: BuildingIn, rebuild: bool = True):
+    user = request.auth
+    objectid = body.objectid or "API_" + uuid.uuid4().hex[:10]
+    if not edit.ID_RE.fullmatch(objectid): raise HttpError(422, "objectid may contain letters, digits, '_', '.', '-' (max 64)")
+    _check_height(body.height_m)
+    if edit.feature_row(objectid): raise HttpError(409, f"objectid {objectid} already exists")
+    srid = edit.db_srid()
+    lineage = f"{body.dataset}.{body.theme}.lod1"
+    edit.layer_row(body.dataset, body.theme, 1)
+    rings = edit.lonlat_to_model([body.footprint, *body.holes], srid)
+    base = body.base_z if body.base_z is not None else edit.mean_ground_z(lineage)
+    gml = edit.building_gml(objectid, {k: v for k, v in body.attributes.items() if v is not None}, rings, base, body.height_m, srid)
+
+    def work(cur, layer):
+        edit.import_gml(gml, lineage, user, f"api:create:{objectid}")
+        return {"objectid": objectid, "action": "created", "job": ("import_all", f"api:POST:{objectid}", gml, {"Building": 1})}
+    return 201, edit.operation(user, body.dataset, body.theme, 1, work, rebuild)
+
+
+@api.patch("/features/{objectid}", tags=["edit"], auth=edit.require_writer, summary="Update attributes and/or geometry of a building (token required)")
+def update_feature(request, objectid: str, body: BuildingPatch, rebuild: bool = True):
+    user = request.auth
+    cur_b = edit.read_building(objectid)
+    if not cur_b: raise HttpError(404, f"Object {objectid} not found")
+    if not cur_b["simple"] and not (body.footprint and body.height_m):
+        raise HttpError(422, "This building's geometry is not a simple extruded footprint; send footprint and height_m to replace it.")
+    srid = edit.db_srid()
+    dataset, theme, lod = edit.parse_lineage(cur_b["lineage"])
+    if lod != 1: raise HttpError(422, "Only LOD1 objects can be edited through the API")
+    rings = (edit.lonlat_to_model([body.footprint, *(body.holes or [])], srid) if body.footprint
+             else [r for r in cur_b["rings"]] if body.holes is None else edit.lonlat_to_model([edit.model_to_lonlat(cur_b["rings"], srid)[0], *body.holes], srid))
+    height = body.height_m if body.height_m is not None else cur_b["height_m"]
+    base = body.base_z if body.base_z is not None else cur_b["base_z"]
+    _check_height(height)
+    attrs = {**cur_b["attributes"], **(body.attributes or {})}
+    attrs = {k: v for k, v in attrs.items() if v is not None}
+    gml = edit.building_gml(objectid, attrs, rings, base, height, srid)
+    old = edit.building_gml(objectid, cur_b["attributes"], cur_b["rings"], cur_b["base_z"], cur_b["height_m"], srid) if cur_b["simple"] else None
+    lineage = cur_b["lineage"]
+
+    def work(cur, layer):
+        edit.delete_ids(objectid, lineage)
+        try:
+            edit.import_gml(gml, lineage, user, f"api:update:{objectid}")
+        except Exception:
+            if old: edit.import_gml(old, lineage, user, f"api:update-rollback:{objectid}")   # compensate: restore the previous block
+            raise
+        return {"objectid": objectid, "action": "updated", "job": ("import_all", f"api:PATCH:{objectid}", gml, {"Building": 1})}
+    return edit.operation(user, dataset, theme, 1, work, rebuild)
+
+
+@api.delete("/features/{objectid}", tags=["edit"], auth=edit.require_writer, summary="Delete a building (token required)")
+def delete_feature(request, objectid: str, rebuild: bool = True):
+    user = request.auth
+    f = edit.feature_row(objectid)
+    if not f: raise HttpError(404, f"Object {objectid} not found")
+    dataset, theme, lod = edit.parse_lineage(f["lineage"])
+    n = rows("SELECT count(*) AS n FROM citydb.feature WHERE lineage = %s AND termination_date IS NULL AND objectclass_id = (SELECT objectclass_id FROM citydb.feature WHERE id = %s)", [f["lineage"], f["id"]])[0]["n"]
+    if n <= 1: raise HttpError(409, "A layer must keep at least one building.")
+
+    def work(cur, layer):
+        edit.delete_ids(objectid, f["lineage"])
+        return {"objectid": objectid, "action": "deleted", "job": ("delete", f"api:DELETE:{objectid}", objectid, {"Building": 1})}
+    return edit.operation(user, dataset, theme, lod, work, rebuild)
+
+
+@api.post("/layers/{layer_id}/rebuild", tags=["edit"], auth=edit.require_writer, summary="Rebuild and activate the tileset from the current database (token required)")
+def rebuild_layer(request, layer_id: str):
+    user = request.auth
+    try:
+        r = rows("SELECT dataset_code, theme_code, lod FROM catalog.v_layer WHERE layer_id = %s", [layer_id])
+    except Exception:
+        raise HttpError(422, "layer_id must be a UUID")
+    if not r: raise HttpError(404, "Layer not found")
+    ds, th, lod = r[0]["dataset_code"], r[0]["theme_code"], r[0]["lod"]
+    layer = edit.layer_row(ds, th, lod)
+    with edit.transaction.atomic(using="default"):
+        with edit.connections["default"].cursor() as cur:
+            cur.execute("SELECT set_config('app.user', %s, true)", [f"api:{user}"])
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", [edit.LOCK_KEY])
+            v, url, n = edit.sync_tiles(cur, layer, ds, th, lod)
+    return {"layerId": layer_id, "tileset": {"version": v, "url": url, "buildings": n}}

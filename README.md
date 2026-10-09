@@ -1,8 +1,8 @@
 # NARAGA 3D Catalog
 
-A reusable catalog and serving stack for 3D city models. It stores CityGML/CityJSON data in **3DCityDB v5 (PostGIS)**, keeps a **catalog** of datasets, layers and 3D Tiles builds, and exposes a read-only **REST API** plus a self-hosted **3D Tiles** endpoint for a Cesium frontend. Non-IT staff manage the catalog through a Django admin.
+A reusable catalog and serving stack for 3D city models. It stores CityGML/CityJSON data in **3DCityDB v5 (PostGIS)**, keeps a **catalog** of datasets, layers and 3D Tiles builds, and exposes a **REST API** (read endpoints are public; create/update/delete of buildings need a write token) plus a self-hosted **3D Tiles** endpoint for a Cesium frontend. Non-IT staff manage the catalog through a Django admin.
 
-**Current data:** dataset `oikn`, theme `building`, LOD1 — 389 buildings (KIPP), published, tileset v1 (self-hosted).
+**Current data:** dataset `oikn`, theme `building`, LOD1 — 389 buildings (KIPP), published, self-hosted tileset (the newest version is always the active one).
 
 ---
 
@@ -92,6 +92,7 @@ All settings come from environment variables (`.env` locally, service variables 
 | `APP_DB_PASSWORD`, `API_DB_PASSWORD` | Passwords of the login roles `twin_app` (admin) and `twin_api` (read-only API) |
 | `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS` | Django |
 | `ALLOWED_ORIGINS` | Comma-separated origins allowed to call `/api/` **and `/tiles/`** from a browser (CORS). Same-origin needs nothing. |
+| `WRITE_API_TOKEN` | Secret for the write endpoints (`Authorization: Bearer …`). **Empty = write API disabled** (returns 503). Use a long random string. |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | First admin account (created on start) |
 | `ADMIN_EDIT_ENABLED` | `0` = read-only admin, `1` = editing enabled |
 | `PROJECT` | Seed folder under `db/seeds/` (default `oikn`) |
@@ -141,7 +142,7 @@ const attrs = await (await fetch(`http://localhost:8000/api/v1/features/${object
 
 ## 5. API reference
 
-Base path `/api/v1`, read-only, JSON. Live OpenAPI: `/api/v1/openapi.json` and `/api/v1/docs`. A Postman collection is in `postman/`.
+Base path `/api/v1`, JSON. Read endpoints are open; endpoints marked *token* need the write token (section 5.1). Live OpenAPI: `/api/v1/openapi.json` and `/api/v1/docs`. A Postman collection is in `postman/`.
 
 | Endpoint | Description |
 |---|---|
@@ -152,6 +153,10 @@ Base path `/api/v1`, read-only, JSON. Live OpenAPI: `/api/v1/openapi.json` and `
 | `GET /datasets/{code}/stats` | Object counts per class and LOD |
 | `GET /features/{objectid}` | Attributes of one city object (class, dataset, lineage, LODs available, attributes) |
 | `GET /features` | Search. Filters: `dataset`, `bbox`, `q` (name), `limit`, `offset`. Returns GeoJSON of envelope footprints |
+| `POST /features` *(token)* | Create a LOD1 building |
+| `PATCH /features/{objectid}` *(token)* | Update attributes and/or geometry |
+| `DELETE /features/{objectid}` *(token)* | Delete a building |
+| `POST /layers/{layerId}/rebuild` *(token)* | Rebuild the tileset from the current database |
 | `GET /tiles/{path}` | Static tile files (`tileset.json`, `.glb`). Not part of `/api/v1`. |
 
 Example `/catalog` item:
@@ -169,11 +174,60 @@ Example `/catalog` item:
 }
 ```
 
+`GET /features/{objectid}` also returns `geometry` for LOD1 buildings: `{footprint: [[[lon,lat],…], holes…], baseZ, heightM}`.
+
 The database stores self-hosted tileset URLs as relative paths (`/tiles/…`); the API returns them as absolute URLs for the host that answered the request, so moving hosts needs no data change.
+
+### 5.1 Write API (create, update, delete)
+
+Every write changes the database **and** the visualization in one request: the building is written to 3DCityDB, the layer's tiles are rebuilt from the database, the new build becomes the active tileset version, and an `import_job` row records who did what. After the response, `GET /catalog` already returns the new tileset and a reloaded frontend shows the change.
+
+**Authentication.** Send `Authorization: Bearer <WRITE_API_TOKEN>` and `X-User: <your name>` (the name is stamped on the change and shown in the audit trail as `api:<name>`). Without the token: `401`; token not configured on the server: `503`; missing `X-User`: `400`.
+
+```bash
+TOKEN=...   # value of WRITE_API_TOKEN
+H=(-H "Authorization: Bearer $TOKEN" -H "X-User: fairuz" -H "Content-Type: application/json")
+
+# Create: footprint = outer ring of [lon, lat]; optional "holes"; height in metres; free-form attributes
+curl -X POST localhost:8000/api/v1/features "${H[@]}" -d '{
+  "dataset": "oikn", "objectid": "MY_001",
+  "footprint": [[116.7090,-0.9720],[116.7094,-0.9720],[116.7094,-0.9717],[116.7090,-0.9717]],
+  "height_m": 25, "attributes": {"nama": "Gedung A", "lantai": 6}}'
+
+# Read (no token)
+curl localhost:8000/api/v1/features/MY_001
+
+# Update: send only what changes; attributes are merged, a null value removes an attribute
+curl -X PATCH localhost:8000/api/v1/features/MY_001 "${H[@]}" -d '{"height_m": 40, "attributes": {"nama": "Gedung A (baru)", "lantai": null}}'
+
+# Delete
+curl -X DELETE localhost:8000/api/v1/features/MY_001 "${H[@]}"
+```
+
+Response (create/update/delete): `{"objectid", "action", "jobId", "layerId", "tileset": {"version", "url", "buildings"}, "stale": false}`.
+
+Rules and behaviour:
+
+- `objectid` is generated (`API_xxxxxxxxxx`) when omitted; it must be unique (`409` otherwise). Allowed characters: letters, digits, `_ . -`.
+- `base_z` (height of the ground in the model's vertical reference) defaults to the mean ground level of the layer, so new buildings sit with their neighbours. Pass it explicitly if you know it.
+- Invalid footprints (self-intersecting, area < 1 m², bad coordinates) and heights outside 0–1000 m return `422`.
+- A layer must keep at least one building (`409` when deleting the last one).
+- `?rebuild=false` skips the tile rebuild for bulk edits; the layer then shows `isStale: true` until you call `POST /layers/{layerId}/rebuild`.
+- If the data was saved but the tile rebuild failed, the response is `502`; call the rebuild endpoint to recover.
+- Writes are serialized (one at a time, database advisory lock). Each write rebuilds the whole tileset (about one second for 400 buildings); for hundreds of edits use `?rebuild=false` and rebuild once.
+- Only the **two newest** tile folders per layer are kept on disk; older tileset versions stay in the catalog as `retired`.
+- **Limits.** Edits are block models (extruded footprint) at LOD1. Updating or creating a building stores a single `lod1Solid`; thematic surface objects (Wall/Roof/Ground) that came with an imported file are not recreated. Buildings whose ground is not exactly one polygon cannot be PATCHed without sending both `footprint` and `height_m`; in the KIPP data all 389 buildings qualify.
+- Update is *delete + re-import* of that one building. If the re-import fails, the previous block is restored automatically.
+
+End-to-end check (creates, reads, updates and deletes a test building and compares the database with the ids inside the served tiles after every step):
+
+```bash
+python3 scripts/crud_smoke.py        # 23 checks; reads WRITE_API_TOKEN from .env
+```
 
 ## 6. Data operations
 
-Rule of thumb: **database first, then tiles, then register the new tileset version.**
+Two ways to change data. For **a few buildings**, use the write API (section 5.1): it updates the database and the tiles together. For **bulk loads or replacing a whole layer**, use the scripts below: **database first, then tiles, then register the new tileset version.**
 
 Scripts (all run from the repository root, local Docker stack):
 
@@ -264,8 +318,9 @@ Register a tileset with provider `cesium_ion` and an `ion_asset_id` through the 
 - **Schema changes** go through dbmate migrations in `db/migrations/` (forward-only; `dbmate down` only for the latest migration before data depends on it). The API container runs `dbmate up` on every start.
 - **Business rules live in the database** (`db/migrations/…_business_rules.sql`): status transitions, "published needs an active ready tileset", one active tileset per layer, audit stamping. Add rules there, not only in Python. Checks are in `db/tests/invariants.sql`.
 - **Database roles:** `twin_api` is read-only and used by the public API; `twin_app` is used by the admin. Every admin write runs in a transaction with `app.user` set; writes with an empty user are rejected.
-- **API code:** `api/catalog/api.py` (endpoints), `api/catalog/admin.py` (admin), `api/catalog/middleware.py` (CORS, audit user), `api/config/urls.py` (routes, including `/tiles/` and `/viewer/`).
-- **Tests:** `make test` (database invariants + pytest). Postman: `newman run postman/naraga-catalog.postman_collection.json -e postman/local.postman_environment.json`. Do not run the tests against a production database.
+- **API code:** `api/catalog/api.py` (endpoints), `api/catalog/edit.py` (write path: CityGML builder, citydb-tool calls, catalog bookkeeping, tile sync), `api/catalog/tiles.py` (3D Tiles writer shared with `scripts/build_tiles.py`), `api/catalog/admin.py` (admin), `api/catalog/middleware.py` (CORS, audit user), `api/config/urls.py` (routes, including `/tiles/` and `/viewer/`).
+- **Write path internals.** The API image contains a JRE and `citydb-tool`; writes build a one-building CityGML file and import/delete it with the same tool as `scripts/import.sh`, so stored data has the same structure as imported data. The subprocess uses the owner connection from `DATABASE_URL`; the public read path still uses the SELECT-only role `twin_api`. Catalog changes run as `twin_app` with `app.user = api:<X-User>`. Treat `WRITE_API_TOKEN` like a database password.
+- **Tests:** `docker compose exec api python -m pytest -q tests` (14 tests, isolated dataset `zz_test`), `python3 scripts/crud_smoke.py` (write API + tile sync end to end). `db/tests/invariants.sql` must run on a **scratch/empty** database; on a database that already has tilesets it fails (`make test` runs it first). Postman: `newman run postman/naraga-catalog.postman_collection.json -e postman/local.postman_environment.json`. Do not run the tests against a production database.
 - **Adding a project:** copy the repository, set `.env` (SRID, `PROJECT`), add `db/seeds/<project>/`. Add themes via `ref_theme` in the admin.
 - **Tile format:** `build_tiles.py` writes glTF with `EXT_mesh_features` and `EXT_structural_metadata` (property `objectid`, STRING). Any other converter is acceptable if each building exposes `objectid` (the client also tries `gml_id`, `gmlId`, `id`, `name`).
 
@@ -273,7 +328,7 @@ Register a tileset with provider `cesium_ion` and an `ion_asset_id` through the 
 
 Step-by-step Railway procedure: [`docs/en/08_RAILWAY_GUIDE.md`](docs/en/08_RAILWAY_GUIDE.md). Overview: [`docs/en/06_DEPLOYMENT.md`](docs/en/06_DEPLOYMENT.md).
 
-Self-hosted tiles need persistent storage in production. Options: mount a Railway Volume at `/srv/tiles`; add `COPY tiles tiles` to `api/Dockerfile` (the current tileset is about 4 MB); or use Cesium ion. The `tiles/` folder is mounted from the host in `docker-compose.yml` for local use and is not baked into the image.
+Self-hosted tiles need persistent, **writable** storage in production (the write API writes new tile versions there). Options: mount a Railway Volume at `/srv/tiles`; add `COPY tiles tiles` to `api/Dockerfile` (the current tileset is about 4 MB); or use Cesium ion. The `tiles/` folder is mounted read-write from the host in `docker-compose.yml` for local use and is not baked into the image. The API image also carries a JRE and `citydb-tool` (about 300 MB larger than a plain Python image).
 
 Backups: `deploy/backup/backup.sh` (nightly `pg_dump -Fc`, optional S3 upload). Tiles are reproducible from source files; keep the source files.
 
@@ -302,6 +357,8 @@ docs/en/        Design documents, runbook, Railway guide      docs/pdf/  rendere
 - **Untested operations:** `MODE=skip` and delete-by-`objectid` (see section 6).
 - **Self-hosted tile storage in production** is not set up yet (section 8).
 - Admin is read-only by default (`ADMIN_EDIT_ENABLED=0`).
+- **Write API** is token-based (one shared secret plus a free-text `X-User`), not per-user authentication. Put it behind your own gateway/SSO before exposing it publicly. See the limits in section 5.1.
+- `db/tests/invariants.sql` only works on an empty scratch database.
 
 ## 11. Troubleshooting
 
@@ -316,6 +373,8 @@ docs/en/        Design documents, runbook, Railway guide      docs/pdf/  rendere
 | Browser blocks `/api` or `/tiles` | Add the frontend origin to `ALLOWED_ORIGINS` and restart the api service. |
 | `isStale` is true | Database changed after the tiles were built. Rebuild and publish the next version. |
 | Import fails on CRS | Source CRS must equal `CITYDB_SRID`. Reproject first. |
+| Write call returns `503` | `WRITE_API_TOKEN` is empty on the server. Set it and restart the api service. |
+| Write call returns `502` | Data saved but tiles not rebuilt. `POST /layers/{layerId}/rebuild`. |
 | `Cannot publish: the layer has no active Ready tileset` | Register a tileset first (`publish_tiles.sh`), then publish. |
 
 ## 12. Further documentation
