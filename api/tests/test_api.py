@@ -71,3 +71,15 @@ def test_features_search_geojson(client, data):
 
 def test_api_is_read_only(client, data):
     assert client.post("/api/v1/catalog").status_code in (404, 405)
+
+
+# --- write API: authentication (the full create/update/delete + tile sync check is scripts/crud_smoke.py)
+def test_write_endpoints_require_token(client):
+    c = client
+    for method, path in [("post", "/api/v1/features"), ("patch", "/api/v1/features/X"), ("delete", "/api/v1/features/X"),
+                         ("post", "/api/v1/layers/00000000-0000-0000-0000-000000000000/rebuild")]:
+        r = getattr(c, method)(path, data="{}", content_type="application/json")
+        assert r.status_code == 401, (method, path, r.status_code)
+        assert r.json()["error"]["code"] == "unauthorized"
+        r = getattr(c, method)(path, data="{}", content_type="application/json", HTTP_AUTHORIZATION="Bearer wrong")
+        assert r.status_code == 401

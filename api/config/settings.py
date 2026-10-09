@@ -9,6 +9,8 @@ DEBUG = os.environ.get("DEBUG", "0") == "1"
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
 CSRF_TRUSTED_ORIGINS = [o for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
 ALLOWED_ORIGINS = [o for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o]
+WRITE_API_TOKEN = os.environ.get("WRITE_API_TOKEN", "")   # empty = write API disabled (POST/PATCH/DELETE return 503)
+CITYDB_TOOL = os.environ.get("CITYDB_TOOL", "/opt/citydb-tool/citydb")
 ADMIN_EDIT_ENABLED = os.environ.get("ADMIN_EDIT_ENABLED", "0") == "1"   # 0 = read-only admin
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")           # behind Railway/Caddy
 SESSION_COOKIE_SECURE = CSRF_COOKIE_SECURE = not DEBUG and os.environ.get("INSECURE_COOKIES", "0") != "1"

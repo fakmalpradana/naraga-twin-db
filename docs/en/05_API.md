@@ -1,6 +1,6 @@
 # Introduction
 
-Status: **draft v0.1 for review** · Base path `/api/v1` · Read-only · JSON · OpenAPI at `/api/v1/openapi.json`, UI at `/api/v1/docs` (django-ninja).
+Status: **draft v0.1 for review** · Base path `/api/v1` · JSON · reads are open, writes need a bearer token (see README section 5.1) · OpenAPI at `/api/v1/openapi.json`, UI at `/api/v1/docs` (django-ninja).
 
 
 # Endpoints
@@ -12,6 +12,7 @@ Status: **draft v0.1 for review** · Base path `/api/v1` · Read-only · JSON ·
 | `GET /datasets`, `GET /datasets/{code}` | Datasets and their layers per LOD |
 | `GET /datasets/{code}/stats` | Object counts per class/LOD |
 | `GET /features/{objectid}` | Attributes of one city object from `citydb` (name, class, height, function, usage, generic attributes, LODs available, dataset, lineage) |
+| `POST /features`, `PATCH /features/{objectid}`, `DELETE /features/{objectid}`, `POST /layers/{id}/rebuild` | **Write API (token).** Create/update/delete a LOD1 building; the served tileset is rebuilt from the database and activated in the same request. Verified end to end on 9 October 2026 with `scripts/crud_smoke.py` (23 checks). Details: README section 5.1 |
 | `GET /features?dataset=&bbox=&q=&limit=` | GeoJSON footprints + key attributes for search |
 
 Rules: `bbox` is lon/lat EPSG:4326; `lod` 0–4, empty = all; `status` default `published`; pagination `limit` (default 50, max 500) + `offset`; unknown filter value → 422.
