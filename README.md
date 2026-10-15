@@ -157,6 +157,9 @@ Base path `/api/v1`, JSON. Read endpoints are open; endpoints marked *token* nee
 | `PATCH /features/{objectid}` *(token)* | Update attributes and/or geometry |
 | `DELETE /features/{objectid}` *(token)* | Delete a building |
 | `POST /layers/{layerId}/rebuild` *(token)* | Rebuild the tileset from the current database |
+| `POST /imports` *(token)* | Upload a CityJSON / CityGML / GeoJSON file into a layer (background job, section 5.2) |
+| `GET /imports/{jobId}` | Status, counts and errors of an import job |
+| `GET /datasets/{code}/export?format=geojson\|cityjson` | Download a dataset as GeoJSON footprints (with `base_z`, `height_m`, attributes) or CityJSON |
 | `GET /tiles/{path}` | Static tile files (`tileset.json`, `.glb`). Not part of `/api/v1`. |
 
 Example `/catalog` item:
@@ -224,6 +227,27 @@ End-to-end check (creates, reads, updates and deletes a test building and compar
 ```bash
 python3 scripts/crud_smoke.py        # 23 checks; reads WRITE_API_TOKEN from .env
 ```
+
+### 5.2 Upload and download files
+
+Upload a whole file into an **existing** layer without SSH. One upload = one citydb-tool import + one `import_job` + one tile rebuild (LOD1), so it is much faster than many `POST /features` calls.
+
+```bash
+# CityJSON 2.0 or CityGML 2.0 (CRS declared in the file), or a GeoJSON FeatureCollection of lon/lat footprints
+curl -X POST localhost:8000/api/v1/imports -H "Authorization: Bearer $TOKEN" -H "X-User: fairuz" \
+     -F file=@data/kipp/KIPP_LOD1.city.json -F dataset=oikn -F theme=building -F lod=1
+# -> 202 {"jobId": "…", "status": "running", "statusUrl": "/api/v1/imports/…"}
+curl localhost:8000/api/v1/imports/<jobId>      # poll until "succeeded" / "failed"; counts, skipped features, new tileset
+
+# Download (no token)
+curl -OJ "localhost:8000/api/v1/datasets/oikn/export?format=geojson"    # oikn.geojson: footprints + base_z + height_m + attributes
+curl -OJ "localhost:8000/api/v1/datasets/oikn/export?format=cityjson"   # oikn.city.json from citydb-tool
+```
+
+- GeoJSON properties: `height_m` (required), `base_z` (optional), `objectid` (optional), the rest become attributes. This is exactly the shape of the GeoJSON export, so *download → edit in QGIS → upload with new ids* works. Invalid features and ids that already exist are skipped and listed in the job's `report.skipped`.
+- CityJSON/CityGML files are imported as they are; ids are **not** checked, so uploading the same file twice duplicates buildings. To replace a layer, delete the old objects first (section 6.2).
+- The upload runs in the background (a minutes-long import would hit gunicorn's 30 s timeout and proxy/browser limits). A new layer still has to be created in the admin first and published as usual; uploaded data appears in `GET /catalog?status=all` right away. Do **not** upload `data/LOD1_landmark` (wrong CRS).
+- Max 200 MB per file. Tiles are built from `lod1Solid` only; for LOD2–4 layers the data is imported but no tileset is built.
 
 ## 6. Data operations
 
