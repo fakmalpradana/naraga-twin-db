@@ -1,7 +1,7 @@
 """data/LOD1_landmark/<NAMA>/LAS_lod1.geojson -> one GeoJSON ready for POST /imports.
 Per feature: objectid LMK_<NAMA>_<n>, nama = folder name, height_m = BHM, base_z = ground of the nearest KIPP building
 (from the oikn GeoJSON export), other properties kept as attributes. Folders without LAS_lod1.geojson are listed and skipped.
-Usage: python3 scripts/prep_landmark.py data/LOD1_landmark oikn.geojson landmark.geojson"""
+Usage: python3 scripts/prep_landmark.py data/LOD1_landmark oikn.geojson oikn_kipp.geojson"""
 import json, re, sys
 from pathlib import Path
 

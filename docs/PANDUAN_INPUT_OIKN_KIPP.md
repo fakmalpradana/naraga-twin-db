@@ -1,7 +1,7 @@
-# Panduan input dan cek dataset Landmark
+# Panduan input dan cek dataset OIKN KIPP (landmark)
 
-Dataset `landmark` (layer `building` LOD1, lineage `landmark.building.lod1`) dibuat oleh seed
-`db/seeds/oikn/002_landmark.sql`. Layernya mulai **kosong** dengan status **draft**, sehingga frontend belum melihat apa pun.
+Dataset `oikn_kipp` (layer `building` LOD1, lineage `oikn_kipp.building.lod1`) dibuat oleh seed
+`db/seeds/oikn/002_oikn_kipp.sql`. Layernya mulai **kosong** dengan status **draft**, sehingga frontend belum melihat apa pun.
 Isinya diunggah lewat `POST /imports`.
 
 Langkahnya sudah diuji di stack lokal pada 15 Okt 2026:
@@ -25,14 +25,14 @@ TOKEN=$(ssh twin-vm "grep ^WRITE_API_TOKEN= /opt/twindb/.env | cut -d= -f2")
 Seed ikut ter-deploy setelah commit ini di-push ke `main`: CI hijau, lalu Deploy berjalan.
 
 ```bash
-curl -s "$BASE/api/v1/catalog?dataset=landmark&status=all"
+curl -s "$BASE/api/v1/catalog?dataset=oikn_kipp&status=all"
 ```
 
 Hasil yang diharapkan: satu item dengan `"status": "draft"`, `"featureCount": 0` dan `"tileset": null`.
 
 ## 1. Siapkan file
 
-**Jalan pintas:** `data/LOD1_landmark/LANDMARK_LOD1.city.json` sudah siap di-upload (tidak di-commit, karena `data/` di-ignore).
+**Jalan pintas:** `data/LOD1_landmark/OIKN_KIPP_LOD1.city.json` sudah siap di-upload (tidak di-commit, karena `data/` di-ignore).
 
 | | |
 |---|---|
@@ -53,7 +53,7 @@ GeoJSON hasil `generator-lod1` belum sesuai format `POST /imports`. Tinggi gedun
 
 ```bash
 curl -fsS "$BASE/api/v1/datasets/oikn/export?format=geojson" -o /tmp/oikn.geojson
-python3 scripts/prep_landmark.py data/LOD1_landmark /tmp/oikn.geojson /tmp/landmark.geojson
+python3 scripts/prep_landmark.py data/LOD1_landmark /tmp/oikn.geojson /tmp/oikn_kipp.geojson
 ```
 
 Mengambil `base_z` dari KIPP terdekat adalah pendekatan kasar. Kalau ada DTM, lebih baik `base_z` diisi dari DTM.
@@ -61,14 +61,14 @@ Mengambil `base_z` dari KIPP terdekat adalah pendekatan kasar. Kalau ada DTM, le
 ## 2. Backup dulu
 
 ```bash
-ssh twin-vm 'cd /opt/twindb && docker compose exec -T db pg_dump -U postgres -Fc postgres > /opt/backups/twindb-before-landmark-$(date +%F).dump'
+ssh twin-vm 'cd /opt/twindb && docker compose exec -T db pg_dump -U postgres -Fc postgres > /opt/backups/twindb-before-oikn-kipp-$(date +%F).dump'
 ```
 
 ## 3. Upload
 
 ```bash
 curl -s -X POST "$BASE/api/v1/imports" -H "Authorization: Bearer $TOKEN" -H "X-User: fairuz" \
-  -F file=@/tmp/landmark.geojson -F dataset=landmark -F theme=building -F lod=1
+  -F file=@/tmp/oikn_kipp.geojson -F dataset=oikn_kipp -F theme=building -F lod=1
 ```
 
 Hasilnya `{"jobId": "...", "status": "running", ...}`. Pantau job-nya sampai `succeeded`, biasanya kurang dari 1 menit:
@@ -88,9 +88,9 @@ Field yang perlu dibaca:
 **a. Lewat API**
 
 ```bash
-curl -s "$BASE/api/v1/catalog?dataset=landmark&status=all"   # featureCount, bbox, tileset.url
+curl -s "$BASE/api/v1/catalog?dataset=oikn_kipp&status=all"   # featureCount, bbox, tileset.url
 curl -s "$BASE/api/v1/features/LMK_GEDUNG_BI_0001"           # atribut + footprint lon/lat
-curl -s "$BASE/api/v1/features?dataset=landmark&q=MASJID&limit=5"
+curl -s "$BASE/api/v1/features?dataset=oikn_kipp&q=MASJID&limit=5"
 ```
 
 Bandingkan koordinat footprint di sini dengan file aslinya. Untuk GEDUNG BI, `GEDUNG BI_koordinat.txt` berisi UTM 50S
@@ -98,7 +98,7 @@ Bandingkan koordinat footprint di sini dengan file aslinya. Untuk GEDUNG BI, `GE
 
 **b. Visual (yang terpenting untuk CRS)**
 
-Buka `$BASE/viewer/`, pilih dataset `landmark`, lalu klik *Load layer*. Viewer juga menampilkan layer yang masih draft. Muat juga
+Buka `$BASE/viewer/`, pilih dataset `oikn_kipp`, lalu klik *Load layer*. Viewer juga menampilkan layer yang masih draft. Muat juga
 `oikn` untuk pembanding, lalu cek:
 
 - Gedung tidak bergeser dari citra.
@@ -113,11 +113,11 @@ Klik satu gedung untuk melihat atributnya.
 SELECT p.val_string AS nama, count(*) AS gedung
 FROM citydb.feature f
 JOIN citydb.property p ON p.feature_id = f.id AND p.name = 'nama' AND p.parent_id IS NULL
-WHERE f.lineage = 'landmark.building.lod1' AND f.termination_date IS NULL
+WHERE f.lineage = 'oikn_kipp.building.lod1' AND f.termination_date IS NULL
 GROUP BY 1 ORDER BY 1;                       -- 22 nama, total 2373 kalau input sama dengan uji lokal
 
 SELECT ST_Extent(ST_Transform(envelope, 4326)) FROM citydb.feature
-WHERE lineage = 'landmark.building.lod1';    -- harus di sekitar lon 116.69-116.73, lat -0.99 sampai -0.95
+WHERE lineage = 'oikn_kipp.building.lod1';    -- harus di sekitar lon 116.69-116.73, lat -0.99 sampai -0.95
 ```
 
 ## 5. Publish (agar frontend melihatnya)
@@ -131,13 +131,13 @@ WITH j AS (
   SELECT ij.id AS job_id, ijl.layer_id FROM catalog.import_job ij
   JOIN catalog.import_job_layer ijl ON ijl.job_id = ij.id
   JOIN catalog.layer l ON l.id = ijl.layer_id JOIN catalog.dataset d ON d.id = l.dataset_id
-  WHERE d.code = 'landmark' AND l.theme_code = 'building' AND l.lod = 1
+  WHERE d.code = 'oikn_kipp' AND l.theme_code = 'building' AND l.lod = 1
     AND ij.status = 'succeeded' AND ij.import_mode = 'import_all'
   ORDER BY ij.created_at DESC LIMIT 1
 ), v AS (UPDATE catalog.import_job SET validation_passed = true FROM j WHERE id = j.job_id RETURNING j.job_id, j.layer_id)
 UPDATE catalog.layer l SET status = 'validated', validated_by_job_id = v.job_id FROM v WHERE l.id = v.layer_id;
 UPDATE catalog.layer l SET status = 'published'
-FROM catalog.dataset d WHERE d.id = l.dataset_id AND d.code = 'landmark' AND l.theme_code = 'building' AND l.lod = 1;
+FROM catalog.dataset d WHERE d.id = l.dataset_id AND d.code = 'oikn_kipp' AND l.theme_code = 'building' AND l.lod = 1;
 COMMIT;
 ```
 
@@ -149,7 +149,7 @@ COMMIT;
 BEGIN;
 SELECT count(*) FROM citydb_pkg.delete_feature(ARRAY(
   SELECT id FROM citydb.feature
-  WHERE lineage = 'landmark.building.lod1'
+  WHERE lineage = 'oikn_kipp.building.lod1'
     AND objectclass_id = (SELECT id FROM citydb.objectclass WHERE classname = 'Building')));   -- 2373
 COMMIT;   -- uji dulu dengan ROLLBACK
 ```
@@ -161,7 +161,7 @@ ulang, tiles lama masih tampil.
 
 ```sql
 UPDATE catalog.layer SET status = 'archived'
-WHERE dataset_id = (SELECT id FROM catalog.dataset WHERE code = 'landmark');
+WHERE dataset_id = (SELECT id FROM catalog.dataset WHERE code = 'oikn_kipp');
 ```
 
 Dengan status `archived`, tileset ikut dipensiunkan. Untuk mengisi layer lagi nanti, kembalikan statusnya ke `'draft'`.
