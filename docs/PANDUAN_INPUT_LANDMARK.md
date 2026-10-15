@@ -32,6 +32,18 @@ Hasil yang diharapkan: satu item dengan `"status": "draft"`, `"featureCount": 0`
 
 ## 1. Siapkan file
 
+**Jalan pintas:** `data/LOD1_landmark/LANDMARK_LOD1.city.json` sudah siap di-upload (tidak di-commit, karena `data/` di-ignore).
+
+| | |
+|---|---|
+| Format | CityJSON 2.0, EPSG:32750 |
+| Isi | 2.373 gedung LOD1 (solid), hasil langkah di bawah |
+| Atribut | `nama`, `cat`, `area`, `measuredHeight` |
+| Ukuran | 14,6 MB |
+
+File ini sudah diuji: di-import ulang lewat `POST /imports` ke layer kosong, hasilnya 2.373 gedung, extent sama, dan tiles terbentuk.
+Kalau memakai file ini, lewati langkah di bawah dan di langkah 3 ganti `file=@...` dengan file ini.
+
 GeoJSON hasil `generator-lod1` belum sesuai format `POST /imports`. Tinggi gedung ada di `BHM` (API butuh `height_m`), tidak ada
 `objectid`, dan tidak ada ketinggian tanah. Skrip `scripts/prep_landmark.py` menggabungkan semua folder menjadi satu file:
 
