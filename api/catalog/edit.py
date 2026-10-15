@@ -14,6 +14,7 @@ from xml.sax.saxutils import escape, quoteattr
 from django.conf import settings
 from django.db import connections, transaction
 from ninja.errors import HttpError
+from ninja.security import HttpBearer
 from pyproj import Transformer
 from shapely.geometry import Polygon
 
@@ -38,6 +39,18 @@ def require_writer(request):
     if not re.fullmatch(r"[\w .@-]{1,64}", user):
         raise HttpError(400, "Header X-User (who is making the change, max 64 chars) is required.")
     return user
+
+
+class WriteToken(HttpBearer):
+    """Bearer scheme for OpenAPI (Swagger "Authorize"); the check itself is require_writer (token + X-User, our error format)."""
+    def __call__(self, request):
+        return require_writer(request)
+
+    def authenticate(self, request, token):   # unused, required by the base class
+        return None
+
+
+WRITER = WriteToken()
 
 
 def secrets_equal(a, b):

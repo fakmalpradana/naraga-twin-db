@@ -7,8 +7,22 @@ from django.db import connections
 from ninja import NinjaAPI, Query, Schema
 from ninja.errors import HttpError, ValidationError
 
-api = NinjaAPI(title="Digital Twin Catalog API", version="1.0", urls_namespace="catalog-api",
-               description="Layers and tilesets for the Cesium frontend, city object attributes from 3DCityDB, and (with a write token) create/update/delete of LOD1 buildings with automatic tile rebuild.")
+DESCRIPTION = """Layers and 3D Tiles for a Cesium (or any 3D Tiles 1.1) frontend, city object attributes from **3DCityDB**,
+and, with a write token, create/update/delete of LOD1 buildings with automatic tile rebuild.
+
+**Frontend in three calls**
+1. `GET /api/v1/catalog?dataset=oikn&theme=building&lod=1` → `items[0].tileset.url` (absolute URL; the version changes after every edit, never hard-code it)
+2. `Cesium.Cesium3DTileset.fromUrl(url)` → every building in the tile has the property `objectid`
+3. On click: `GET /api/v1/features/{objectid}` → attributes, footprint, base height and height from the database
+
+**Conventions** · coordinates and `bbox` are lon/lat (EPSG:4326) · pagination `limit` (max 500) + `offset` ·
+every error is `{"error": {"code", "message", "details"}}` · reads need no token.
+
+**Writes** (tag *edit*) need `Authorization: Bearer <WRITE_API_TOKEN>` (button *Authorize*) **and** the header
+`X-User: <your name>` (stamped on the change). One write = 3DCityDB change + tile rebuild + new active tileset version.
+Batch many writes with `?rebuild=false` and finish with `POST /layers/{layerId}/rebuild`."""
+
+api = NinjaAPI(title="Digital Twin Catalog API", version="1.1", urls_namespace="catalog-api", description=DESCRIPTION)
 
 
 def error(status, code, message, details=None):
@@ -67,8 +81,9 @@ def layer_item(r, base=""):   # base = this server's origin; turns a stored '/ti
             "isStale": r["is_stale"], "bbox": bbox, "tileset": tileset}
 
 
-@api.get("/health", tags=["service"])
+@api.get("/health", tags=["service"], summary="Service and database status")
 def health(request):
+    """`200 {"status": "ok", "database": "ok"}` or `503 {"status": "degraded", "database": "unreachable"}`."""
     try:
         rows("SELECT 1")
         return {"status": "ok", "database": "ok"}
@@ -80,6 +95,23 @@ def health(request):
 def catalog(request, lod: Optional[int] = Query(None, ge=0, le=4), theme: Optional[str] = None,
             dataset: Optional[str] = None, status: str = "published", bbox: Optional[str] = None,
             limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    """Entry point for the frontend: every layer (dataset × theme × LOD) with its **active** tileset.
+
+    Filters: `dataset` (e.g. `oikn`), `theme` (`building`), `lod` (0–4), `bbox` (minLon,minLat,maxLon,maxLat; layers whose extent
+    intersects it), `status` (`published` by default; `draft`, `validated`, `archived` or `all`).
+
+    Item fields: `layerId`, `title`, `dataset {code, name, generatedBy, attribution, verticalDatum}`, `theme`, `lod`, `status`,
+    `featureCount`, `isStale` (data changed after the tiles were built), `bbox`, and `tileset` (null when the layer has none):
+    `{id, version, provider: self_hosted|cesium_ion, url (absolute, self_hosted), ionAssetId (cesium_ion), heightOffsetM, publishedAt}`.
+
+    ```json
+    {"items": [{"layerId": "ec5f6a15-…", "title": "OIKN buildings LOD1", "dataset": {"code": "oikn", "name": "OIKN", …},
+      "theme": "building", "lod": 1, "status": "published", "featureCount": 389, "isStale": false,
+      "bbox": [116.696, -0.987, 116.722, -0.958],
+      "tileset": {"version": 17, "provider": "self_hosted", "url": "https://…/tiles/oikn/building/lod1/v17/tileset.json", "heightOffsetM": 0.0, …}}],
+     "limit": 50, "offset": 0, "total": 1}
+    ```
+    Apply `heightOffsetM` as a vertical shift in metres. Errors: 422 (bad filter value)."""
     valid = {r["code"] for r in rows("SELECT code FROM catalog.ref_layer_status")}
     if status != "all" and status not in valid:
         raise HttpError(422, f"status must be one of {sorted(valid)} or 'all'")
@@ -96,8 +128,9 @@ def catalog(request, lod: Optional[int] = Query(None, ge=0, le=4), theme: Option
     return {"items": [layer_item(r, request.build_absolute_uri("/")) for r in items], "limit": limit, "offset": offset, "total": total}
 
 
-@api.get("/layers/{layer_id}/tileset", tags=["catalog"])
+@api.get("/layers/{layer_id}/tileset", tags=["catalog"], summary="Active tileset of one layer")
 def layer_tileset(request, layer_id: str):
+    """The `tileset` object of `/catalog` for one `layerId`. Errors: 404 (no layer or no active tileset), 422 (not a UUID)."""
     try:
         r = rows("SELECT * FROM catalog.v_layer WHERE layer_id = %s", [layer_id])
     except Exception:
@@ -107,8 +140,9 @@ def layer_tileset(request, layer_id: str):
     return layer_item(r[0], request.build_absolute_uri("/"))["tileset"]
 
 
-@api.get("/datasets", tags=["datasets"])
+@api.get("/datasets", tags=["datasets"], summary="Active datasets")
 def datasets(request, limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    """`{items: [{code, name, region, generatedBy, verticalDatum, attribution, layers}], limit, offset, total}`."""
     total = rows("SELECT count(*) AS n FROM catalog.dataset WHERE status = 'active'")[0]["n"]
     items = rows("""SELECT d.code, d.name, d.region, d.generated_by, d.vertical_datum, d.attribution,
                            (SELECT count(*) FROM catalog.layer l WHERE l.dataset_id = d.id AND l.status <> 'archived') AS layers
@@ -118,8 +152,10 @@ def datasets(request, limit: int = Query(50, ge=1, le=500), offset: int = Query(
             "limit": limit, "offset": offset, "total": total}
 
 
-@api.get("/datasets/{code}", tags=["datasets"])
+@api.get("/datasets/{code}", tags=["datasets"], summary="One dataset with its layers")
 def dataset(request, code: str):
+    """Dataset metadata (incl. `description`, `license`) and its non-archived layers (same item shape as `/catalog`,
+    tileset URLs relative). Errors: 404."""
     d = rows("SELECT code, name, description, region, generated_by, vertical_datum, attribution, license FROM catalog.dataset WHERE code = %s", [code])
     if not d:
         raise HttpError(404, "Dataset not found")
@@ -130,8 +166,9 @@ def dataset(request, code: str):
             "license": r["license"], "layers": [layer_item(x) for x in layers]}
 
 
-@api.get("/datasets/{code}/stats", tags=["datasets"])
+@api.get("/datasets/{code}/stats", tags=["datasets"], summary="Object counts per class and LOD")
 def dataset_stats(request, code: str):
+    """`{dataset, items: [{theme, class, lod, topLevel, featureCount}]}`. Errors: 404."""
     if not rows("SELECT 1 FROM catalog.dataset WHERE code = %s", [code]):
         raise HttpError(404, "Dataset not found")
     st = rows("""SELECT theme_code, classname, lod, feature_count, is_toplevel FROM catalog.layer_feature_stats
@@ -150,6 +187,18 @@ def value_of(r):
 
 @api.get("/features/{objectid}", tags=["features"], summary="Attributes of one city object (gml:id)")
 def feature(request, objectid: str, dataset: Optional[str] = None):
+    """Everything the database knows about one object; call it with the `objectid` read from the clicked tile feature.
+
+    ```json
+    {"objectid": "KIPP_0000", "class": "Building", "dataset": "oikn", "theme": "building", "lineage": "oikn.building.lod1",
+     "geometry": {"footprint": [[[116.69733, -0.97186], …]], "baseZ": 28.91, "heightM": 4.37},
+     "lodsAvailable": ["1"],
+     "attributes": [{"name": "nama", "value": "ALFAMART IKN_BO", "uom": null}, {"name": "h_ground", "value": 28.91, "uom": null}, …],
+     "bbox": [116.69712, -0.97186, 116.69740, -0.97155], "createdAt": "…", "modifiedAt": "…", "modifiedBy": "fairuz"}
+    ```
+    `geometry` is filled for LOD1 buildings that are an extruded footprint (lon/lat rings, `baseZ` ground height in the model's
+    height system, `heightM` building height), otherwise null. Pass `dataset` when the same id exists in several datasets.
+    Errors: 404, 409 (id in several datasets)."""
     where, p = ["f.objectid = %s", "f.termination_date IS NULL"], [objectid]
     if dataset:
         where.append("(f.lineage = %s OR f.lineage LIKE %s)"); p += [dataset, dataset.replace("_", "\\_") + ".%"]
@@ -187,6 +236,10 @@ def feature(request, objectid: str, dataset: Optional[str] = None):
 @api.get("/features", tags=["features"], summary="Search city objects (GeoJSON, envelope footprints)")
 def features(request, dataset: Optional[str] = None, bbox: Optional[str] = None, q: Optional[str] = None,
              limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+    """GeoJSON FeatureCollection of top-level objects for lists, search and 2D maps.
+    `q` matches the `objectid` or the `name`/`nama` attribute (case-insensitive, substring), e.g. `q=MASJID`.
+    Geometry is the object's bounding box (lon/lat), not the exact footprint; use `/features/{objectid}` for that.
+    Properties: `objectid`, `class`, `lineage`, `name`. Errors: 422 (bad bbox)."""
     where, p = ["f.lineage IS NOT NULL", "f.termination_date IS NULL", "oc.is_toplevel = 1"], []
     if dataset:
         where.append("(f.lineage = %s OR f.lineage LIKE %s)"); p += [dataset, dataset.replace("_", "\\_") + ".%"]
@@ -194,11 +247,12 @@ def features(request, dataset: Optional[str] = None, bbox: Optional[str] = None,
         where.append("f.envelope && ST_Transform(ST_MakeEnvelope(%s, %s, %s, %s, 4326), (SELECT srid FROM citydb.database_srs LIMIT 1))")
         p += parse_bbox(bbox)
     if q:
-        where.append("""EXISTS (SELECT 1 FROM citydb.property pn WHERE pn.feature_id = f.id AND pn.name = 'name' AND pn.val_string ILIKE %s)""")
-        p.append(f"%{q}%")
+        where.append("""(f.objectid ILIKE %s OR EXISTS (SELECT 1 FROM citydb.property pn WHERE pn.feature_id = f.id
+                                                         AND pn.name IN ('name', 'nama') AND pn.val_string ILIKE %s))""")
+        p += [f"%{q}%", f"%{q}%"]
     w = " AND ".join(where)
     res = rows(f"""SELECT f.objectid, oc.classname, f.lineage,
-                          (SELECT pn.val_string FROM citydb.property pn WHERE pn.feature_id = f.id AND pn.name = 'name' LIMIT 1) AS name,
+                          (SELECT pn.val_string FROM citydb.property pn WHERE pn.feature_id = f.id AND pn.name IN ('name', 'nama') ORDER BY pn.name LIMIT 1) AS name,
                           ST_AsGeoJSON(ST_Transform(ST_Force2D(ST_Envelope(f.envelope)), 4326)) AS geom
                    FROM citydb.feature f JOIN citydb.objectclass oc ON oc.id = f.objectclass_id
                    WHERE {w} ORDER BY f.id LIMIT %s OFFSET %s""", p + [limit, offset])
@@ -239,8 +293,22 @@ def _check_height(h):
     if not (0 < h <= 1000): raise HttpError(422, "height_m must be between 0 and 1000")
 
 
-@api.post("/features", tags=["edit"], auth=edit.require_writer, summary="Create a LOD1 building (token required)", response={201: dict})
+@api.post("/features", tags=["edit"], auth=edit.WRITER, summary="Create a LOD1 building (token required)", response={201: dict})
 def create_feature(request, body: BuildingIn, rebuild: bool = True):
+    """Add one LOD1 block building (footprint extruded to a height) to an existing layer.
+
+    Body: `dataset` (layer must exist), `theme` (default `building`), `objectid` (optional, unique in the whole database,
+    letters/digits/`_.-`, max 64; generated `API_…` when omitted), `footprint` (outer ring of [lon, lat], ≥ 3 points, valid,
+    ≥ 1 m²), `holes` (inner rings), `height_m` (0 < h ≤ 1000), `base_z` (ground height in the layer's height system, e.g.
+    KIPP `h_ground`; default = mean ground of the layer), `attributes` (name → string/number).
+
+    ```json
+    {"dataset": "oikn", "objectid": "KIPP_0389", "footprint": [[116.7090,-0.9720],[116.7094,-0.9720],[116.7094,-0.9717],[116.7090,-0.9717]],
+     "height_m": 25, "base_z": 26.3, "attributes": {"nama": "Gedung Baru", "lantai": 6}}
+    ```
+    `201 {"objectid", "action": "created", "jobId", "layerId", "tileset": {"version", "url", "buildings"}, "stale": false}`
+    (`tileset` null and `stale` true with `?rebuild=false`). Takes ~10–20 s with rebuild.
+    Errors: 400 (no X-User), 401, 404 (layer), 409 (objectid exists), 422 (geometry/height/attribute name), 502 (saved, tile rebuild failed), 503."""
     user = request.auth
     objectid = body.objectid or "API_" + uuid.uuid4().hex[:10]
     if not edit.ID_RE.fullmatch(objectid): raise HttpError(422, "objectid may contain letters, digits, '_', '.', '-' (max 64)")
@@ -259,8 +327,13 @@ def create_feature(request, body: BuildingIn, rebuild: bool = True):
     return 201, edit.operation(user, body.dataset, body.theme, 1, work, rebuild)
 
 
-@api.patch("/features/{objectid}", tags=["edit"], auth=edit.require_writer, summary="Update attributes and/or geometry of a building (token required)")
+@api.patch("/features/{objectid}", tags=["edit"], auth=edit.WRITER, summary="Update attributes and/or geometry of a building (token required)")
 def update_feature(request, objectid: str, body: BuildingPatch, rebuild: bool = True):
+    """Send only what changes: `footprint` (+ `holes`), `height_m`, `base_z`, `attributes`. Attributes are merged into the existing
+    ones; a `null` value removes that attribute. Example: `{"height_m": 40, "attributes": {"lantai": 10, "catatan": null}}`.
+    Internally delete + re-import of that one building; if the re-import fails the previous block is restored.
+    Response as for create with `action: "updated"`. Errors: 400, 401, 404, 422 (also when the stored geometry is not a simple
+    extruded footprint and no new `footprint` + `height_m` is sent), 502, 503."""
     user = request.auth
     cur_b = edit.read_building(objectid)
     if not cur_b: raise HttpError(404, f"Object {objectid} not found")
@@ -291,8 +364,10 @@ def update_feature(request, objectid: str, body: BuildingPatch, rebuild: bool = 
     return edit.operation(user, dataset, theme, 1, work, rebuild)
 
 
-@api.delete("/features/{objectid}", tags=["edit"], auth=edit.require_writer, summary="Delete a building (token required)")
+@api.delete("/features/{objectid}", tags=["edit"], auth=edit.WRITER, summary="Delete a building (token required)")
 def delete_feature(request, objectid: str, rebuild: bool = True):
+    """Remove one building from 3DCityDB and from the tiles. Response as for create with `action: "deleted"`.
+    Errors: 400, 401, 404, 409 (it is the last building of its layer), 502, 503."""
     user = request.auth
     f = edit.feature_row(objectid)
     if not f: raise HttpError(404, f"Object {objectid} not found")
@@ -306,8 +381,11 @@ def delete_feature(request, objectid: str, rebuild: bool = True):
     return edit.operation(user, dataset, theme, lod, work, rebuild)
 
 
-@api.post("/layers/{layer_id}/rebuild", tags=["edit"], auth=edit.require_writer, summary="Rebuild and activate the tileset from the current database (token required)")
+@api.post("/layers/{layer_id}/rebuild", tags=["edit"], auth=edit.WRITER, summary="Rebuild and activate the tileset from the current database (token required)")
 def rebuild_layer(request, layer_id: str):
+    """Rebuild the layer's 3D Tiles from the current database and make them the active version
+    (`{layerId, tileset: {version, url, buildings}}`). Use it after a batch of `?rebuild=false` writes or when `isStale` is true.
+    Errors: 400, 401, 404, 422 (not a UUID), 503."""
     user = request.auth
     try:
         r = rows("SELECT dataset_code, theme_code, lod FROM catalog.v_layer WHERE layer_id = %s", [layer_id])
