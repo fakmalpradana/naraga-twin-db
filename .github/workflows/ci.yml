@@ -1,0 +1,58 @@
+# CI: the full stack (3DCityDB + API) on a fresh database, then every test layer we have.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WRITE_API_TOKEN: ci-write-token   # enables the write API for the newman/curl checks; pytest sets its own
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Config (.env from the example, write API and admin editing on)
+        run: |
+          cp .env.example .env
+          sed -i -e "s/^WRITE_API_TOKEN=.*/WRITE_API_TOKEN=$WRITE_API_TOKEN/" -e "s/^ADMIN_EDIT_ENABLED=.*/ADMIN_EDIT_ENABLED=1/" .env   # admin tests edit through the admin
+
+      - name: Build and start db + api
+        run: docker compose up -d --build
+
+      - name: Wait for the API
+        run: |
+          for i in $(seq 1 120); do curl -fs localhost:8000/api/v1/health && exit 0; sleep 5; done
+          docker compose logs --tail 200; exit 1
+
+      - name: Database invariants (fresh database)
+        run: docker compose exec -T db psql -U postgres -v ON_ERROR_STOP=1 -q -f - < db/tests/invariants.sql
+
+      - name: pytest (API, write path, upload/export, admin)
+        run: docker compose exec -T api python -m pytest -q tests
+
+      - name: Postman collection (newman)
+        run: npx --yes newman@6 run postman/naraga-catalog.postman_collection.json -e postman/local.postman_environment.json
+
+      - name: OpenAPI is complete (every operation documented, writes behind bearer auth)
+        run: |
+          curl -fs localhost:8000/api/v1/openapi.json | python3 -c '
+          import json, sys
+          ops = [(m, p, o) for p, v in json.load(sys.stdin)["paths"].items() for m, o in v.items()]
+          bad = [f"{m.upper()} {p}: no description" for m, p, o in ops if not o.get("description")]
+          bad += [f"{m.upper()} {p}: write without auth" for m, p, o in ops if m != "get" and not o.get("security")]
+          print("\n".join(bad) or f"{len(ops)} operations OK"); sys.exit(bool(bad))'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail 300

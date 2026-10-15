@@ -14,6 +14,7 @@ from xml.sax.saxutils import escape, quoteattr
 from django.conf import settings
 from django.db import connections, transaction
 from ninja.errors import HttpError
+from ninja.security import HttpBearer
 from pyproj import Transformer
 from shapely.geometry import Polygon
 
@@ -38,6 +39,18 @@ def require_writer(request):
     if not re.fullmatch(r"[\w .@-]{1,64}", user):
         raise HttpError(400, "Header X-User (who is making the change, max 64 chars) is required.")
     return user
+
+
+class WriteToken(HttpBearer):
+    """Bearer scheme for OpenAPI (Swagger "Authorize"); the check itself is require_writer (token + X-User, our error format)."""
+    def __call__(self, request):
+        return require_writer(request)
+
+    def authenticate(self, request, token):   # unused, required by the base class
+        return None
+
+
+WRITER = WriteToken()
 
 
 def secrets_equal(a, b):
@@ -246,6 +259,135 @@ def sync_tiles(cur, layer, dataset, theme, lod):
         shutil.rmtree(out, ignore_errors=True); raise
     transaction.on_commit(lambda: _prune(Path(settings.ROOT) / rel))
     return version, f"/{rel}/v{version}/tileset.json", len(names)
+
+
+def wrap_gml(members):
+    """One CityGML document from cityObjectMember strings cut out of building_gml() output."""
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n<core:CityModel xmlns:core="http://www.opengis.net/citygml/2.0" '
+            'xmlns:bldg="http://www.opengis.net/citygml/building/2.0" xmlns:gen="http://www.opengis.net/citygml/generics/2.0" '
+            'xmlns:gml="http://www.opengis.net/gml">' + "".join(members) + "</core:CityModel>")
+
+
+def member_of(gml):
+    return re.search(r"<core:cityObjectMember>.*</core:cityObjectMember>", gml, re.S).group(0)
+
+
+# ---------------------------------------------------------------- file import (POST /imports, runs in a background thread)
+IMPORT_DIR = Path(tempfile.gettempdir()) / "twindb-imports"
+RESERVED = {"objectid", "height_m", "base_z", "lineage", "class"}    # GeoJSON properties that are not attributes
+
+
+def geojson_to_gml(fc, lineage, srid):
+    """GeoJSON FeatureCollection of lon/lat footprints -> one CityGML document of LOD1 blocks (same checks and builder as
+    POST /features). Properties: height_m (required), base_z, objectid, everything else = attributes (the export format).
+    Returns (gml or None, number of buildings, skipped [{index, objectid, reason}])."""
+    if not isinstance(fc, dict) or fc.get("type") != "FeatureCollection":
+        raise ValueError("GeoJSON must be a FeatureCollection")
+    members, skipped, seen, ground = [], [], set(), None
+    for i, f in enumerate(fc.get("features") or []):
+        p = dict((f or {}).get("properties") or {})
+        oid = str(p.get("objectid") or f.get("id") or "API_" + uuid.uuid4().hex[:10])
+        try:
+            g = f.get("geometry") or {}
+            polys = [g.get("coordinates")] if g.get("type") == "Polygon" else g.get("coordinates") if g.get("type") == "MultiPolygon" else []
+            if len(polys or []) != 1: raise HttpError(422, "geometry must be a Polygon (or a MultiPolygon with one part)")
+            if not ID_RE.fullmatch(oid): raise HttpError(422, "objectid may contain letters, digits, '_', '.', '-' (max 64)")
+            if oid in seen or feature_row(oid): raise HttpError(409, f"objectid {oid} already exists")
+            h, base = p.get("height_m"), p.get("base_z")
+            if isinstance(h, bool) or not isinstance(h, (int, float)) or not 0 < h <= 1000: raise HttpError(422, "height_m must be a number between 0 and 1000")
+            if base is not None and (isinstance(base, bool) or not isinstance(base, (int, float))): raise HttpError(422, "base_z must be a number")
+            if base is None:
+                ground = mean_ground_z(lineage) if ground is None else ground; base = ground
+            attrs = {k: v for k, v in p.items() if k not in RESERVED and v is not None}
+            if any(not isinstance(v, (str, int, float, bool)) for v in attrs.values()): raise HttpError(422, "attribute values must be strings or numbers")
+            rings = lonlat_to_model([[pt[:2] for pt in r] for r in polys[0]], srid)
+            members.append(member_of(building_gml(oid, attrs, rings, float(base), float(h), srid))); seen.add(oid)
+        except (HttpError, TypeError, ValueError, KeyError, IndexError) as e:
+            skipped.append({"index": i, "objectid": oid, "reason": str(e) or type(e).__name__})
+    return (wrap_gml(members) if members else None), len(members), skipped
+
+
+def sniff_format(head):
+    """citygml | cityjson | geojson from the first bytes of a file, or None."""
+    s = head.lstrip(b"\xef\xbb\xbf \t\r\n")
+    if s.startswith(b"<"): return "citygml"
+    if s.startswith(b"{"):
+        if b'"CityJSON"' in s: return "cityjson"
+        if b'"FeatureCollection"' in s: return "geojson"
+    return None
+
+
+def start_import(user, dataset, theme, lod, upload, fmt):
+    """Save the upload, register a 'running' import_job and run the import in a background thread. Returns the job id."""
+    layer = layer_row(dataset, theme, lod)
+    IMPORT_DIR.mkdir(exist_ok=True)
+    path = IMPORT_DIR / f"{uuid.uuid4().hex}.{'gml' if fmt == 'citygml' else 'json'}"
+    sha, size = hashlib.sha256(), 0
+    with open(path, "wb") as out:
+        for chunk in upload.chunks():
+            sha.update(chunk); size += len(chunk); out.write(chunk)
+    lineage = f"{dataset}.{theme}.lod{lod}"
+    with transaction.atomic(using="default"), connections["default"].cursor() as cur:
+        cur.execute("SELECT set_config('app.user', %s, true)", [f"api:{user}"])
+        cur.execute("""INSERT INTO catalog.import_job (dataset_id, source_file, source_sha256, source_size_bytes, import_mode, lineage_tag,
+                         tool_version, citygml_version, status, report) VALUES (%s,%s,%s,%s,'import_all',%s,'1.4.0','2.0','running',%s::jsonb) RETURNING id""",
+                    [layer["dataset_id"], (upload.name or "upload")[:200], sha.hexdigest(), size, lineage, json.dumps({"format": fmt})])
+        job = cur.fetchone()[0]
+        cur.execute("INSERT INTO catalog.import_job_layer VALUES (%s, %s)", [job, layer["layer_id"]])
+    # ponytail: an in-process thread; if the worker restarts mid-import the job stays 'running'. Move to a queue (e.g. RQ) if that bites.
+    import threading
+    threading.Thread(target=_run_import, args=(str(job), user, layer, dataset, theme, lod, path, fmt), daemon=True).start()
+    return str(job)
+
+
+def _run_import(job, user, layer, dataset, theme, lod, path, fmt):
+    lineage = f"{dataset}.{theme}.lod{lod}"
+    report = {"format": fmt}
+    try:
+        src, kind = path, fmt
+        if fmt == "geojson":
+            gml, n, skipped = geojson_to_gml(json.loads(path.read_text()), lineage, db_srid())
+            report.update(buildings=n, skipped=skipped)
+            if not gml: raise ValueError("no valid building in the GeoJSON (see skipped)")
+            src, kind = path.with_suffix(".gml"), "citygml"
+            src.write_text(gml)
+        with transaction.atomic(using="default"), connections["default"].cursor() as cur:
+            cur.execute("SELECT set_config('app.user', %s, true)", [f"api:{user}"])
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", [LOCK_KEY])
+            _citydb(["import", kind], ["--lineage", lineage, "--reason-for-update", f"import_job:{job}", "--updating-person", user,
+                                       "-m", "import_all", "--compute-extent", str(src)], timeout=3600)
+            cur.execute("""SELECT oc.classname, count(*) FROM citydb.feature f JOIN citydb.objectclass oc ON oc.id = f.objectclass_id
+                           WHERE f.reason_for_update = %s AND f.lineage = %s AND oc.is_toplevel = 1 GROUP BY 1""", [f"import_job:{job}", lineage])
+            counts = dict(cur.fetchall())
+            if not counts: raise ValueError("the file contained no city objects that could be imported")
+            cur.execute("SELECT catalog.refresh_derived()")
+            report["tileset"] = None
+            if lod == 1:                                  # tiles are built from lod1Solid only
+                try:
+                    with transaction.atomic(using="default"):   # savepoint: a failed rebuild keeps the imported data
+                        v, url, n = sync_tiles(cur, layer, dataset, theme, lod)
+                    report["tileset"] = {"version": v, "url": url, "buildings": n}
+                except Exception as e:
+                    report["tileError"] = "data saved but tiles not rebuilt; call POST /layers/{id}/rebuild. " + str(e)[:300]
+            cur.execute("UPDATE catalog.import_job SET status = 'succeeded', counts = %s::jsonb, report = %s::jsonb, finished_at = clock_timestamp() WHERE id = %s",
+                        [json.dumps(counts), json.dumps(report), job])
+    except Exception as e:
+        report["error"] = str(e)[:1000] or type(e).__name__
+        with transaction.atomic(using="default"), connections["default"].cursor() as cur:
+            cur.execute("SELECT set_config('app.user', %s, true)", [f"api:{user}"])
+            cur.execute("UPDATE catalog.import_job SET status = 'failed', report = %s::jsonb, finished_at = clock_timestamp() WHERE id = %s", [json.dumps(report), job])
+    finally:
+        path.unlink(missing_ok=True); path.with_suffix(".gml").unlink(missing_ok=True)
+        connections.close_all()
+
+
+def export_cityjson(lineages):
+    """citydb-tool CityJSON export of the given lineages; returns the file bytes."""
+    assert lineages and all(re.fullmatch(r"[a-z0-9_.]+", x) for x in lineages)   # they go into a CQL filter
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "export.city.json"
+        _citydb(["export", "cityjson"], ["--no-json-lines", "-o", str(f), "-f", "lineage IN (" + ", ".join(f"'{x}'" for x in lineages) + ")"], timeout=600)
+        return f.read_bytes()
 
 
 def _prune(base):

@@ -1,0 +1,54 @@
+# CD: after CI is green on main (or by hand), copy the code to the Hetzner VM, back up the database, rebuild, health-check.
+# Needs repository secrets DEPLOY_HOST (VM IP), DEPLOY_SSH_KEY (private key whose public key is in root's authorized_keys),
+# DEPLOY_KNOWN_HOSTS (ssh-keyscan of the VM) and the variable DEPLOY_URL (public base URL). Setup: docs/PANDUAN_HETZNER.md §9.
+# The VM keeps its own .env, tiles/ and data/; they are never overwritten.
+name: Deploy
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-hetzner
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: hetzner
+      url: ${{ vars.DEPLOY_URL }}
+    env:
+      HOST: ${{ secrets.DEPLOY_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: SSH setup
+        run: |
+          [ -n "$HOST" ] || { echo "::error::DEPLOY_HOST secret is not set (see docs/PANDUAN_HETZNER.md §9)"; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Back up the database
+        run: ssh root@"$HOST" 'cd /opt/twindb && docker compose exec -T db pg_dump -U postgres -Fc postgres > /opt/backups/twindb-predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump'
+
+      - name: Copy code (keeps .env, tiles/, data/ on the VM)
+        run: rsync -az --delete --exclude .git/ --exclude .github/ --exclude .env --exclude tiles/ --exclude data/ ./ root@"$HOST":/opt/twindb/
+
+      - name: Rebuild and restart (migrations and seeds run on api start)
+        run: ssh root@"$HOST" 'cd /opt/twindb && docker compose up -d --build && docker image prune -f >/dev/null'
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 60); do curl -fs "${{ vars.DEPLOY_URL }}/api/v1/health" && exit 0; sleep 5; done
+          ssh root@"$HOST" 'cd /opt/twindb && docker compose logs --tail 100 api'; exit 1
