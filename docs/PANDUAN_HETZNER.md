@@ -197,6 +197,24 @@ mkdir -p /opt/backups && crontab -l 2>/dev/null | { cat; echo '0 18 * * * cd /op
 
 Backup ini masih ikut hilang kalau VM hilang. Untuk data penting, jalankan `deploy/backup/` ke bucket S3/R2 (bucket yang sama dengan clydetwin juga bisa), atau aktifkan Hetzner Backups (+20% harga VM).
 
+## 9. CI/CD (GitHub Actions)
+
+- **CI** (`.github/workflows/ci.yml`) jalan otomatis di setiap PR dan push ke `main`. Isinya: build db + api di database kosong, lalu invariants, pytest, Postman, dan cek kelengkapan OpenAPI.
+- **Deploy** (`.github/workflows/deploy.yml`) jalan setelah CI hijau di `main`, atau manual lewat tab Actions → Deploy → *Run workflow*. Urutannya: backup DB ke `/opt/backups/twindb-predeploy-*.dump`, rsync kode (`.env`, `tiles/`, `data/` di VM tidak disentuh), `docker compose up -d --build`, lalu cek `/api/v1/health`.
+
+Setup sekali (dari Mac, di folder repo):
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/twindb_deploy -N "" -C "github-actions-deploy"
+ssh twin-vm "cat >> ~/.ssh/authorized_keys" < ~/.ssh/twindb_deploy.pub
+gh secret set DEPLOY_HOST --body "178.105.182.162"
+gh secret set DEPLOY_SSH_KEY < ~/.ssh/twindb_deploy
+ssh-keyscan -t ed25519 178.105.182.162 | gh secret set DEPLOY_KNOWN_HOSTS
+gh variable set DEPLOY_URL --body "https://twindb.178-105-182-162.sslip.io"
+```
+
+Kalau key deploy perlu dicabut, hapus barisnya dari `/root/.ssh/authorized_keys` di VM.
+
 ## Troubleshooting
 
 | Gejala | Penyebab |

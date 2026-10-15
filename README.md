@@ -1,8 +1,12 @@
 # NARAGA 3D Catalog
 
+[![CI](https://github.com/fakmalpradana/naraga-twin-db/actions/workflows/ci.yml/badge.svg)](https://github.com/fakmalpradana/naraga-twin-db/actions/workflows/ci.yml) [![Deploy](https://github.com/fakmalpradana/naraga-twin-db/actions/workflows/deploy.yml/badge.svg)](https://github.com/fakmalpradana/naraga-twin-db/actions/workflows/deploy.yml)
+
 A reusable catalog and serving stack for 3D city models. It stores CityGML/CityJSON data in **3DCityDB v5 (PostGIS)**, keeps a **catalog** of datasets, layers and 3D Tiles builds, and exposes a **REST API** (read endpoints are public; create/update/delete of buildings need a write token) plus a self-hosted **3D Tiles** endpoint for a Cesium frontend. Non-IT staff manage the catalog through a Django admin.
 
 **Current data:** dataset `oikn`, theme `building`, LOD1 — 389 buildings (KIPP), published, self-hosted tileset (the newest version is always the active one).
+
+**Live test server:** https://twindb.178-105-182-162.sslip.io · API docs `/api/v1/docs` · viewer `/viewer/` · frontend brief [`docs/BRIEF_FE.md`](docs/BRIEF_FE.md) (Indonesian). Test data only; it may be reset.
 
 ---
 
@@ -344,11 +348,24 @@ Register a tileset with provider `cesium_ion` and an `ion_asset_id` through the 
 - **Database roles:** `twin_api` is read-only and used by the public API; `twin_app` is used by the admin. Every admin write runs in a transaction with `app.user` set; writes with an empty user are rejected.
 - **API code:** `api/catalog/api.py` (endpoints), `api/catalog/edit.py` (write path: CityGML builder, citydb-tool calls, catalog bookkeeping, tile sync), `api/catalog/tiles.py` (3D Tiles writer shared with `scripts/build_tiles.py`), `api/catalog/admin.py` (admin), `api/catalog/middleware.py` (CORS, audit user), `api/config/urls.py` (routes, including `/tiles/` and `/viewer/`).
 - **Write path internals.** The API image contains a JRE and `citydb-tool`; writes build a one-building CityGML file and import/delete it with the same tool as `scripts/import.sh`, so stored data has the same structure as imported data. The subprocess uses the owner connection from `DATABASE_URL`; the public read path still uses the SELECT-only role `twin_api`. Catalog changes run as `twin_app` with `app.user = api:<X-User>`. Treat `WRITE_API_TOKEN` like a database password.
-- **Tests:** `docker compose exec api python -m pytest -q tests` (14 tests, isolated dataset `zz_test`), `python3 scripts/crud_smoke.py` (write API + tile sync end to end). `db/tests/invariants.sql` must run on a **scratch/empty** database; on a database that already has tilesets it fails (`make test` runs it first). Postman: `newman run postman/naraga-catalog.postman_collection.json -e postman/local.postman_environment.json`. Do not run the tests against a production database.
+- **Tests:** `docker compose exec api python -m pytest -q tests` (19 tests, isolated datasets `zz_test` and `zz_imp`), `python3 scripts/crud_smoke.py` (write API + tile sync end to end). `db/tests/invariants.sql` must run on a **scratch/empty** database; on a database that already has tilesets it fails (`make test` runs it first). Postman: `newman run postman/naraga-catalog.postman_collection.json -e postman/local.postman_environment.json`. Do not run the tests against a production database. CI (`.github/workflows/ci.yml`) runs all of these on a fresh stack for every pull request and push to `main`, plus a check that every OpenAPI operation is documented and every write needs the bearer token.
 - **Adding a project:** copy the repository, set `.env` (SRID, `PROJECT`), add `db/seeds/<project>/`. Add themes via `ref_theme` in the admin.
 - **Tile format:** `build_tiles.py` writes glTF with `EXT_mesh_features` and `EXT_structural_metadata` (property `objectid`, STRING). Any other converter is acceptable if each building exposes `objectid` (the client also tries `gml_id`, `gmlId`, `id`, `name`).
 
 ## 8. Deployment
+
+**Current: one Hetzner VM** (cx23, Docker Compose, Caddy on the host for TLS), shared with other projects. Full setup, data move, backups and troubleshooting in [`docs/PANDUAN_HETZNER.md`](docs/PANDUAN_HETZNER.md) (Indonesian). On the VM `DB_PORT=127.0.0.1:55432` and `API_PORT=127.0.0.1:8001` keep the database and API off the internet; Caddy proxies the public domain to the API and compresses JSON and `.glb`. Tiles live in `/opt/twindb/tiles` (host folder, in the nightly backup).
+
+### 8.1 CI/CD
+
+| Workflow | When | What |
+|---|---|---|
+| `CI` (`.github/workflows/ci.yml`) | every pull request, push to `main`, manual | builds db + api on a fresh database, then invariants, pytest, Postman (newman) and the OpenAPI completeness check |
+| `Deploy` (`.github/workflows/deploy.yml`) | after `CI` succeeds on `main`, or manual (*Run workflow*) | backs up the VM database (`/opt/backups/twindb-predeploy-*.dump`), copies the code with rsync (the VM's `.env`, `tiles/` and `data/` are kept), `docker compose up -d --build` (migrations and seeds run on start), then waits for `/api/v1/health` |
+
+The deploy job needs the repository secrets `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` and the variable `DEPLOY_URL`; setup in `docs/PANDUAN_HETZNER.md` §9. Data changes (imports, edits) are never part of a deploy; they go through the API or the scripts in section 6.
+
+### 8.2 Railway (alternative)
 
 Step-by-step Railway procedure: [`docs/en/08_RAILWAY_GUIDE.md`](docs/en/08_RAILWAY_GUIDE.md). Overview: [`docs/en/06_DEPLOYMENT.md`](docs/en/06_DEPLOYMENT.md).
 
@@ -368,6 +385,7 @@ scripts/        import.sh, build_tiles.py, publish_tiles.sh
 tiles/          Built 3D Tiles (git-ignored locally; tiles/<dataset>/<theme>/lod<N>/v<version>/)
 data/           Source data (not committed)
 deploy/         Backup job and db image for Railway
+.github/        CI (tests on every PR) and CD (deploy to the Hetzner VM)
 postman/        API collection and environments
 docs/en/        Design documents, runbook, Railway guide      docs/pdf/  rendered PDFs
 ```
@@ -379,7 +397,8 @@ docs/en/        Design documents, runbook, Railway guide      docs/pdf/  rendere
 - **Single-tile tileset:** `build_tiles.py` writes one tile (about 4 MB for 389 buildings). For tens of thousands of buildings use a hierarchical tiler.
 - **LOD1 only.** LOD2 (NARAGA) and LOD4 layers exist as drafts without data.
 - **Untested operations:** `MODE=skip` and delete-by-`objectid` (see section 6).
-- **Self-hosted tile storage in production** is not set up yet (section 8).
+- **Self-hosted tile storage** is a host folder on the Hetzner VM (section 8); on Railway it still needs a volume.
+- **Backups stay on the VM.** The nightly dump and tile archive are in `/opt/backups` on the same machine; copy them off-site (S3/R2 via `deploy/backup/`) before relying on them.
 - Admin is read-only by default (`ADMIN_EDIT_ENABLED=0`).
 - **Write API** is token-based (one shared secret plus a free-text `X-User`), not per-user authentication. Put it behind your own gateway/SSO before exposing it publicly. See the limits in section 5.1.
 - `db/tests/invariants.sql` only works on an empty scratch database.
@@ -403,7 +422,7 @@ docs/en/        Design documents, runbook, Railway guide      docs/pdf/  rendere
 
 ## 12. Further documentation
 
-Read in this order for the full design: [DDD](docs/en/01_DDD.md) → [ERD](docs/en/02_ERD.md) → [Database schema](docs/en/03_DATABASE_SCHEMA.md) → [SAD](docs/en/04_SAD.md) → [API](docs/en/05_API.md) → [Deployment](docs/en/06_DEPLOYMENT.md) → [Runbook](docs/en/07_RUNBOOK.md) → [Railway guide](docs/en/08_RAILWAY_GUIDE.md). PDFs with rendered diagrams are in `docs/pdf/`; rebuild with `python3 docs/en/build.py` (needs pandoc, Chrome, poppler). An Indonesian operating guide is in [`docs/PANDUAN_SERVE_UPDATE.md`](docs/PANDUAN_SERVE_UPDATE.md).
+Read in this order for the full design: [DDD](docs/en/01_DDD.md) → [ERD](docs/en/02_ERD.md) → [Database schema](docs/en/03_DATABASE_SCHEMA.md) → [SAD](docs/en/04_SAD.md) → [API](docs/en/05_API.md) → [Deployment](docs/en/06_DEPLOYMENT.md) → [Runbook](docs/en/07_RUNBOOK.md) → [Railway guide](docs/en/08_RAILWAY_GUIDE.md). PDFs with rendered diagrams are in `docs/pdf/`; rebuild with `python3 docs/en/build.py` (needs pandoc, Chrome, poppler). Indonesian guides: operating and updating data [`docs/PANDUAN_SERVE_UPDATE.md`](docs/PANDUAN_SERVE_UPDATE.md), Hetzner deployment [`docs/PANDUAN_HETZNER.md`](docs/PANDUAN_HETZNER.md), how the KIPP data was loaded plus the write-API guide and CRUD test results [`docs/LAPORAN_INPUT_DATA_KIPP.md`](docs/LAPORAN_INPUT_DATA_KIPP.md), frontend brief [`docs/BRIEF_FE.md`](docs/BRIEF_FE.md).
 
 ### For data editors (non-IT)
 
