@@ -4,7 +4,7 @@ import json, uuid
 from typing import Optional
 
 from django.db import connections
-from ninja import File, Form, NinjaAPI, Query, Schema, UploadedFile
+from ninja import File, Form, Header, NinjaAPI, Query, Schema, UploadedFile
 from ninja.errors import HttpError, ValidationError
 
 DESCRIPTION = """Layers and 3D Tiles for a Cesium (or any 3D Tiles 1.1) frontend, city object attributes from **3DCityDB**,
@@ -327,6 +327,11 @@ def features(request, dataset: Optional[str] = None, bbox: Optional[str] = None,
 from typing import Dict, List, Union
 from . import edit
 
+
+def x_user_header():
+    # Only so Swagger shows an X-User field; the check (400 if missing) stays in edit.require_writer.
+    return Header(None, alias="X-User", description="Who makes the change (required, max 64 chars), e.g. `fairuz`")
+
 Attr = Union[str, float, int, bool, None]
 
 
@@ -354,7 +359,7 @@ def _check_height(h):
 
 
 @api.post("/features", tags=["edit"], auth=edit.WRITER, summary="Create a LOD1 building (token required)", response={201: dict})
-def create_feature(request, body: BuildingIn, rebuild: bool = True):
+def create_feature(request, body: BuildingIn, rebuild: bool = True, x_user: Optional[str] = x_user_header()):
     """Add one LOD1 block building (footprint extruded to a height) to an existing layer.
 
     Body: `dataset` (layer must exist), `theme` (default `building`), `objectid` (optional, unique in the whole database,
@@ -388,7 +393,7 @@ def create_feature(request, body: BuildingIn, rebuild: bool = True):
 
 
 @api.patch("/features/{objectid}", tags=["edit"], auth=edit.WRITER, summary="Update attributes and/or geometry of a building (token required)")
-def update_feature(request, objectid: str, body: BuildingPatch, rebuild: bool = True):
+def update_feature(request, objectid: str, body: BuildingPatch, rebuild: bool = True, x_user: Optional[str] = x_user_header()):
     """Send only what changes: `footprint` (+ `holes`), `height_m`, `base_z`, `attributes`. Attributes are merged into the existing
     ones; a `null` value removes that attribute. Example: `{"height_m": 40, "attributes": {"lantai": 10, "catatan": null}}`.
     Internally delete + re-import of that one building; if the re-import fails the previous block is restored.
@@ -425,7 +430,7 @@ def update_feature(request, objectid: str, body: BuildingPatch, rebuild: bool = 
 
 
 @api.delete("/features/{objectid}", tags=["edit"], auth=edit.WRITER, summary="Delete a building (token required)")
-def delete_feature(request, objectid: str, rebuild: bool = True):
+def delete_feature(request, objectid: str, rebuild: bool = True, x_user: Optional[str] = x_user_header()):
     """Remove one building from 3DCityDB and from the tiles. Response as for create with `action: "deleted"`.
     Errors: 400, 401, 404, 409 (it is the last building of its layer), 502, 503."""
     user = request.auth
@@ -442,7 +447,7 @@ def delete_feature(request, objectid: str, rebuild: bool = True):
 
 
 @api.post("/layers/{layer_id}/rebuild", tags=["edit"], auth=edit.WRITER, summary="Rebuild and activate the tileset from the current database (token required)")
-def rebuild_layer(request, layer_id: str):
+def rebuild_layer(request, layer_id: str, x_user: Optional[str] = x_user_header()):
     """Rebuild the layer's 3D Tiles from the current database and make them the active version
     (`{layerId, tileset: {version, url, buildings}}`). Use it after a batch of `?rebuild=false` writes or when `isStale` is true.
     Errors: 400, 401, 404, 422 (not a UUID), 503."""
@@ -466,7 +471,7 @@ MAX_UPLOAD = 200 * 1024 * 1024
 
 
 @api.post("/imports", tags=["edit"], auth=edit.WRITER, summary="Upload a file into a layer (token required, runs in the background)", response={202: dict})
-def create_import(request, file: UploadedFile = File(...), dataset: str = Form(...), theme: str = Form("building"), lod: int = Form(1)):
+def create_import(request, file: UploadedFile = File(...), dataset: str = Form(...), theme: str = Form("building"), lod: int = Form(1), x_user: Optional[str] = x_user_header()):
     """Multipart upload (`file` + form fields `dataset`, `theme` = `building`, `lod` = 1) into an **existing** layer. Formats
     (detected from the content):
     - **CityJSON 2.0** or **CityGML 2.0**: imported as is by citydb-tool; the file's CRS must be declared in it
