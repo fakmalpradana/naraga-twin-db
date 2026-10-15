@@ -77,7 +77,8 @@ def test_api_is_read_only(client, data):
 def test_write_endpoints_require_token(client):
     c = client
     for method, path in [("post", "/api/v1/features"), ("patch", "/api/v1/features/X"), ("delete", "/api/v1/features/X"),
-                         ("post", "/api/v1/layers/00000000-0000-0000-0000-000000000000/rebuild")]:
+                         ("post", "/api/v1/layers/00000000-0000-0000-0000-000000000000/rebuild"),
+                         ("put", "/api/v1/layers/00000000-0000-0000-0000-000000000000/status")]:
         r = getattr(c, method)(path, data="{}", content_type="application/json")
         assert r.status_code == 401, (method, path, r.status_code)
         assert r.json()["error"]["code"] == "unauthorized"

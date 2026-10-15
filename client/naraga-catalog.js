@@ -13,10 +13,10 @@ export function createClient(baseUrl) {
   const listLayers = (filters = {}) => get("/catalog", filters).then((r) => r.items);
   const getFeature = (objectid, dataset) => get(`/features/${encodeURIComponent(objectid)}`, { dataset });
 
-  /** Load the active tileset of the first layer matching the filters (e.g. {lod: 1}). Needs Cesium.Ion.defaultAccessToken for ion tiles. */
+  /** Load the active tileset of the first layer matching the filters (e.g. {lod: 1}; published only unless {status}). Needs Cesium.Ion.defaultAccessToken for ion tiles. */
   async function loadTileset(viewer, filters = {}) {
     const [layer] = await listLayers(filters);
-    if (!layer) throw new Error("No published layer matches " + JSON.stringify(filters));
+    if (!layer) throw new Error("No layer matches " + JSON.stringify(filters));
     const t = layer.tileset;
     const tileset = t.provider === "cesium_ion"
       ? await Cesium.Cesium3DTileset.fromIonAssetId(t.ionAssetId)

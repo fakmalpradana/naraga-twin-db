@@ -118,6 +118,22 @@ def test_geojson_upload_then_export(layer):
     assert st["status"] == "failed" and len(st["report"]["skipped"]) == 2 and "already exists" in st["report"]["skipped"][0]["reason"]
 
 
+def test_layer_status(layer):
+    def put(status):
+        return Client().put(f"/api/v1/layers/{layer}/status", json.dumps({"status": status}), content_type="application/json", **H)
+    def listed():
+        return [i["dataset"]["code"] for i in Client().get("/api/v1/catalog?dataset=zz_imp").json()["items"]]
+    assert put("nope").status_code == 422
+    r = put("published")                                   # draft -> validated -> published (the upload above made a tileset)
+    assert r.status_code == 200 and r.json() == {"layerId": layer, "previousStatus": "draft", "status": "published"}
+    assert listed() == ["zz_imp"]
+    r = put("draft")                                       # published -> draft is not an allowed move
+    assert r.status_code == 409 and "cannot move" in r.json()["error"]["message"]
+    assert put("validated").json()["status"] == "validated" and listed() == []
+    assert Client().put("/api/v1/layers/00000000-0000-0000-0000-000000000000/status", json.dumps({"status": "published"}),
+                        content_type="application/json", **H).status_code == 404
+
+
 def test_export_errors(client):
     assert client.get("/api/v1/datasets/does_not_exist/export").status_code == 404
     r = client.get("/api/v1/datasets/oikn/export?format=shp")

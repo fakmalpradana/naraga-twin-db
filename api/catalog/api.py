@@ -3,7 +3,7 @@ are in catalog/edit.py, need a bearer token and keep the served tileset in sync.
 import json, uuid
 from typing import Optional
 
-from django.db import connections
+from django.db import DatabaseError, connections
 from ninja import File, Form, Header, NinjaAPI, Query, Schema, UploadedFile
 from ninja.errors import HttpError, ValidationError
 
@@ -23,7 +23,8 @@ every error is `{"error": {"code", "message", "details"}}` · reads need no toke
 Batch many writes with `?rebuild=false` and finish with `POST /layers/{layerId}/rebuild`.
 
 **Files** · upload a CityJSON / CityGML / GeoJSON file into a layer with `POST /imports` (token, runs in the background, poll
-`GET /imports/{jobId}`) · download a dataset with `GET /datasets/{code}/export?format=geojson|cityjson` (no token)."""
+`GET /imports/{jobId}`), then show it to the frontend with `PUT /layers/{layerId}/status` `{"status": "published"}` ·
+download a dataset with `GET /datasets/{code}/export?format=geojson|cityjson` (no token)."""
 
 api = NinjaAPI(title="Digital Twin Catalog API", version="1.1", urls_namespace="catalog-api", description=DESCRIPTION)
 
@@ -324,7 +325,7 @@ def features(request, dataset: Optional[str] = None, bbox: Optional[str] = None,
 
 
 # ---------------------------------------------------------------- write API (token required)
-from typing import Dict, List, Union
+from typing import Dict, List, Literal, Union
 from . import edit
 
 
@@ -465,6 +466,43 @@ def rebuild_layer(request, layer_id: str, x_user: Optional[str] = x_user_header(
             cur.execute("SELECT pg_advisory_xact_lock(%s)", [edit.LOCK_KEY])
             v, url, n = edit.sync_tiles(cur, layer, ds, th, lod)
     return {"layerId": layer_id, "tileset": {"version": v, "url": url, "buildings": n}}
+
+
+class LayerStatusIn(Schema):
+    status: Literal["draft", "validated", "published", "archived"]
+
+
+@api.put("/layers/{layer_id}/status", tags=["edit"], auth=edit.WRITER, summary="Publish, unpublish or archive a layer (token required)")
+def set_layer_status(request, layer_id: str, body: LayerStatusIn, x_user: Optional[str] = x_user_header()):
+    """Move a layer through `draft → validated → published → archived` (body `{"status": "published"}`). Only `published`
+    layers are listed by `GET /catalog` without `status=all`, so this is the step that shows an uploaded layer to the frontend.
+    - From `draft` to `validated` or `published`: the layer's latest successful import job is marked as validated first.
+    - `published` needs an active tileset (every upload or write with rebuild makes one).
+    - Back to `validated` hides the layer again; `archived` also retires its tilesets (to fill it again, set `draft`).
+
+    Response: `{layerId, previousStatus, status}`. Errors: 400, 401, 404, 409 (move not allowed, no successful import, no
+    tileset), 422 (not a UUID or unknown status), 503."""
+    user = request.auth
+    try:
+        r = rows("SELECT status FROM catalog.layer WHERE id = %s", [layer_id])
+    except Exception:
+        raise HttpError(422, "layer_id must be a UUID")
+    if not r: raise HttpError(404, "Layer not found")
+    before = r[0]["status"]
+    try:
+        with edit.transaction.atomic(using="default"), edit.connections["default"].cursor() as cur:
+            cur.execute("SELECT set_config('app.user', %s, true)", [f"api:{user}"])
+            if before == "draft" and body.status in ("validated", "published"):
+                cur.execute("""SELECT j.id FROM catalog.import_job j JOIN catalog.import_job_layer jl ON jl.job_id = j.id
+                               WHERE jl.layer_id = %s AND j.status = 'succeeded' ORDER BY j.created_at DESC LIMIT 1""", [layer_id])
+                job = cur.fetchone()
+                if not job: raise HttpError(409, "No successful import into this layer yet; upload data first (POST /imports).")
+                cur.execute("UPDATE catalog.import_job SET validation_passed = true WHERE id = %s", [job[0]])
+                cur.execute("UPDATE catalog.layer SET status = 'validated', validated_by_job_id = %s WHERE id = %s", [job[0], layer_id])
+            cur.execute("UPDATE catalog.layer SET status = %s WHERE id = %s AND status <> %s", [body.status, layer_id, body.status])
+    except DatabaseError as e:   # the database rules (allowed moves, tileset needed to publish) say why
+        raise HttpError(409, str(e).split("\n")[0][:300])
+    return {"layerId": layer_id, "previousStatus": before, "status": body.status}
 
 
 MAX_UPLOAD = 200 * 1024 * 1024

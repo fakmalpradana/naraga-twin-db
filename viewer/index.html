@@ -85,7 +85,7 @@ $("load").onclick = async () => {
   if (l.tileset.provider === "cesium_ion" && !$("token").value) return show("Enter a Cesium ion token to load ion tiles.");
   try {
     if (loaded) viewer.scene.primitives.remove(loaded);
-    const { tileset } = await client.loadTileset(viewer, { dataset: l.dataset.code, theme: l.theme, lod: l.lod });
+    const { tileset } = await client.loadTileset(viewer, { dataset: l.dataset.code, theme: l.theme, lod: l.lod, status: l.status });
     loaded = tileset; viewer.zoomTo(tileset);
     $("meta").innerHTML = `<b>${l.title || l.dataset.code}</b><br><span class="tag ${l.status}">${l.status}</span>
       ${l.isStale ? '<span class="tag stale">stale: data changed after tiles were built</span>' : ""}<br>

@@ -98,7 +98,7 @@ Bandingkan koordinat footprint di sini dengan file aslinya. Untuk GEDUNG BI, `GE
 
 **b. Visual (yang terpenting untuk CRS)**
 
-Buka `$BASE/viewer/`, pilih dataset `oikn_kipp`, lalu klik *Load layer*. Viewer juga menampilkan layer yang masih draft. Muat juga
+Buka `$BASE/viewer/`, pilih dataset `oikn_kipp`, lalu klik *Load layer*. Viewer juga bisa memuat layer yang belum published. Muat juga
 `oikn` untuk pembanding, lalu cek:
 
 - Gedung tidak bergeser dari citra.
@@ -122,24 +122,25 @@ WHERE lineage = 'oikn_kipp.building.lod1';    -- harus di sekitar lon 116.69-116
 
 ## 5. Publish (agar frontend melihatnya)
 
-Jalankan di DBeaver sebagai `postgres`. Setelah ini, `GET /api/v1/catalog` tanpa `status=all` ikut menampilkan landmark.
+Lewat API, cukup satu request. Ambil `layerId` dari langkah 4a, yaitu `GET /catalog?dataset=oikn_kipp&status=all`.
 
-```sql
-BEGIN;
-SELECT set_config('app.user', 'fairuz', true);
-WITH j AS (
-  SELECT ij.id AS job_id, ijl.layer_id FROM catalog.import_job ij
-  JOIN catalog.import_job_layer ijl ON ijl.job_id = ij.id
-  JOIN catalog.layer l ON l.id = ijl.layer_id JOIN catalog.dataset d ON d.id = l.dataset_id
-  WHERE d.code = 'oikn_kipp' AND l.theme_code = 'building' AND l.lod = 1
-    AND ij.status = 'succeeded' AND ij.import_mode = 'import_all'
-  ORDER BY ij.created_at DESC LIMIT 1
-), v AS (UPDATE catalog.import_job SET validation_passed = true FROM j WHERE id = j.job_id RETURNING j.job_id, j.layer_id)
-UPDATE catalog.layer l SET status = 'validated', validated_by_job_id = v.job_id FROM v WHERE l.id = v.layer_id;
-UPDATE catalog.layer l SET status = 'published'
-FROM catalog.dataset d WHERE d.id = l.dataset_id AND d.code = 'oikn_kipp' AND l.theme_code = 'building' AND l.lod = 1;
-COMMIT;
+```bash
+curl -s -X PUT "$BASE/api/v1/layers/<layerId>/status" -H "Authorization: Bearer $TOKEN" -H "X-User: fairuz" \
+  -H "Content-Type: application/json" -d '{"status": "published"}'
+# {"layerId": "...", "previousStatus": "draft", "status": "published"}
 ```
+
+Di Swagger, pakai `PUT /api/v1/layers/{layer_id}/status` dengan body `{"status": "published"}`. Isi juga token di Authorize
+dan kolom `X-User`.
+
+Apa yang terjadi di balik request ini:
+
+- Dari `draft`, import terakhir yang sukses otomatis dicatat sebagai validasi (`draft → validated → published`).
+- Publish butuh tileset aktif. Tileset ini sudah dibuat oleh upload.
+- Setelah publish, `GET /api/v1/catalog` tanpa `status=all` ikut menampilkan layer ini.
+
+Kalau dari `draft` belum ada import yang sukses, atau perpindahan status tidak diizinkan (misalnya `published → draft`), API
+menjawab 409 dengan alasannya.
 
 ## 6. Kalau hasilnya salah (misalnya CRS masih bergeser)
 
@@ -157,14 +158,9 @@ COMMIT;   -- uji dulu dengan ROLLBACK
 Setelah itu ulangi langkah 3. Import baru membangun ulang tiles, sehingga tiles lama ikut tergantikan. Selama belum di-upload
 ulang, tiles lama masih tampil.
 
-**Atau sembunyikan saja dari frontend tanpa menghapus data:**
-
-```sql
-UPDATE catalog.layer SET status = 'archived'
-WHERE dataset_id = (SELECT id FROM catalog.dataset WHERE code = 'oikn_kipp');
-```
-
-Dengan status `archived`, tileset ikut dipensiunkan. Untuk mengisi layer lagi nanti, kembalikan statusnya ke `'draft'`.
+**Atau sembunyikan saja dari frontend tanpa menghapus data:** pakai endpoint yang sama dengan body `{"status": "validated"}`.
+Layer hilang dari `/catalog`, tapi masih bisa dicek di viewer, dan nanti cukup di-publish lagi. Status `"archived"` juga
+memensiunkan tileset-nya. Untuk mengisi layer lagi setelah archived, set dulu ke `"draft"`.
 
 **Atau restore backup** dari langkah 2 (lihat `docs/PANDUAN_HETZNER.md`).
 

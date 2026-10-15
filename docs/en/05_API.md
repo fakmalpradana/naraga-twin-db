@@ -14,7 +14,7 @@ Status: **v1.1, live** · Test server `https://twindb.178-105-182-162.sslip.io` 
 | `GET /datasets/{code}/export?format=geojson\|cityjson` | **Download** every current object of the dataset as a file: GeoJSON (real footprints + `base_z` + `height_m` + attributes, lon/lat) or CityJSON 2.0 exported by citydb-tool |
 | `POST /imports` *(token, multipart)*, `GET /imports/{jobId}` | **Upload** a CityJSON 2.0 / CityGML 2.0 file, or a GeoJSON of footprints, into an existing layer; runs in the background, poll the job (section "File upload and download") |
 | `GET /features/{objectid}` | Attributes of one city object from `citydb` (name, class, height, function, usage, generic attributes, LODs available, dataset, lineage) |
-| `POST /features`, `PATCH /features/{objectid}`, `DELETE /features/{objectid}`, `POST /layers/{id}/rebuild` | **Write API (token).** Create/update/delete a LOD1 building; the served tileset is rebuilt from the database and activated in the same request. Verified end to end on 9 October 2026 with `scripts/crud_smoke.py` (23 checks) and on the Hetzner server on 15 October 2026 (18 checks, `docs/LAPORAN_INPUT_DATA_KIPP.md`). Details: README section 5.1 |
+| `POST /features`, `PATCH /features/{objectid}`, `DELETE /features/{objectid}`, `POST /layers/{id}/rebuild`, `PUT /layers/{id}/status` | **Write API (token).** Create/update/delete a LOD1 building; the served tileset is rebuilt from the database and activated in the same request. Verified end to end on 9 October 2026 with `scripts/crud_smoke.py` (23 checks) and on the Hetzner server on 15 October 2026 (18 checks, `docs/LAPORAN_INPUT_DATA_KIPP.md`). Details: README section 5.1 |
 | `GET /features?dataset=&bbox=&q=&limit=` | GeoJSON for search and 2D lists: bounding-box geometry + `objectid`, `class`, `lineage`, `name`. `q` matches the `objectid` or the `name`/`nama` attribute (e.g. `q=MASJID`) |
 
 Rules: `bbox` is lon/lat EPSG:4326; `lod` 0–4, empty = all; `status` default `published`; pagination `limit` (default 50, max 500) + `offset`; unknown filter value → 422.
@@ -44,8 +44,9 @@ Headers: `Authorization: Bearer <WRITE_API_TOKEN>` and `X-User: <name>`. Missing
 | `PATCH /features/{objectid}[?rebuild=false]` | only the fields that change; attributes merged, `null` removes one | 11–17 s |
 | `DELETE /features/{objectid}[?rebuild=false]` | removes the building; the last building of a layer cannot be deleted (409) | ~12 s |
 | `POST /layers/{layerId}/rebuild` | rebuild tiles from the database, activate as the next version | ~9 s |
+| `PUT /layers/{layerId}/status` | `{"status": "draft"\|"validated"\|"published"\|"archived"}` → `{layerId, previousStatus, status}`. From draft the latest successful import is marked validated first; publishing needs an active tileset; disallowed moves → 409 | < 1 s |
 
-Write response: `{objectid, action, jobId, layerId, tileset: {version, url, buildings} | null, stale}`. Every write adds a row to `catalog.import_job` (who, what, when). Layers and datasets are not created through the API (admin UI or `db/seeds/`). Error codes: 409 conflict (id exists / last building), 422 invalid geometry, height or attribute name, 502 data saved but tile rebuild failed (call rebuild).
+Write response: `{objectid, action, jobId, layerId, tileset: {version, url, buildings} | null, stale}`. Every write adds a row to `catalog.import_job` (who, what, when). Layers and datasets are not created through the API (admin UI or `db/seeds/`); their status is (`PUT /layers/{id}/status`). Error codes: 409 conflict (id exists / last building), 422 invalid geometry, height or attribute name, 502 data saved but tile rebuild failed (call rebuild).
 
 # File upload and download
 
