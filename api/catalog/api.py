@@ -1,6 +1,6 @@
 """API /api/v1 (django-ninja). Reads use the SELECT-only DB alias `ro`. Writes (POST/PATCH/DELETE on /features, POST /layers/{id}/rebuild)
 are in catalog/edit.py, need a bearer token and keep the served tileset in sync."""
-import json, uuid
+import json, re, uuid
 from typing import Optional
 
 from django.db import DatabaseError, connections
@@ -76,7 +76,7 @@ def layer_item(r, base=""):   # base = this server's origin; turns a stored '/ti
     tileset = None
     if r["tileset_id"]:
         tileset = {"id": str(r["tileset_id"]), "version": r["tileset_version"], "provider": r["provider"],
-                   "ionAssetId": r["ion_asset_id"], "url": base.rstrip("/") + r["url"] if r["url"] and r["url"].startswith("/") else r["url"], "heightOffsetM": float(r["height_offset_m"]),
+                   "ionAssetId": r["ion_asset_id"], "url": base.rstrip("/") + re.sub(r"/v\d+/(?=[^/]+$)", "/", r["url"]) if r["url"] and r["url"].startswith("/") else r["url"],   # stable URL: drop /vN (config.urls.stable_tile serves the active version) "heightOffsetM": float(r["height_offset_m"]),
                    "publishedAt": r["published_at"].isoformat() if r["published_at"] else None}
     return {"layerId": str(r["layer_id"]), "title": r["title"],
             "dataset": {"code": r["dataset_code"], "name": r["dataset_name"], "generatedBy": r["generated_by"],
