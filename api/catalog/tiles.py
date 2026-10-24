@@ -1,10 +1,11 @@
 """3D Tiles writer shared by the API (rebuild from the database) and scripts/build_tiles.py (from an OBJ).
 Input is a triangle mesh in the model CRS plus one name (= objectid) per building; output is a one-tile
 tileset (tileset.json + buildings.glb) in which every building carries its `objectid`.
-Pure functions, no Django imports. Needs numpy, pyproj, pygltflib, mapbox-earcut."""
+Pure functions, no Django imports. The mesh is Draco-compressed (KHR_draco_mesh_compression). Needs numpy, pyproj, pygltflib, mapbox-earcut, DracoPy."""
 import json
 from pathlib import Path
 
+import DracoPy
 import numpy as np
 from pyproj import Transformer
 from pygltflib import GLTF2, Scene, Node, Mesh, Primitive, Buffer, BufferView, Accessor, Material, Asset
@@ -57,22 +58,31 @@ def write_tiles(V, F, owner, names, out, epsg):
 
     ids = [n.encode() for n in names]
     offs = np.cumsum([0] + [len(b) for b in ids]).astype("<u4")
+    # Draco: positions quantized to 20 bits (~2 cm over a 20 km tile), normals to 8 bits, feature id kept exact as a generic attribute
+    FID = 10                                                    # unique id of the feature-id attribute inside the Draco stream
+    n = len(pos)
+    draco = DracoPy.encode(pos, np.arange(n, dtype=np.uint32).reshape(-1, 3), quantization_bits=20, compression_level=7,
+                           normals=nor.astype("f8"), normal_quantization_bits=8, generic_attributes={FID: fid.reshape(-1, 1)})
+    dec = DracoPy.decode(draco)
+    uid = {{0: "POSITION", 1: "NORMAL"}[a["attribute_type"]]: a["unique_id"] for a in dec.attributes if a["attribute_type"] in (0, 1)}   # ids Draco assigned
     g = GLTF2(asset=Asset(version="2.0"), scene=0, scenes=[Scene(nodes=[0])], nodes=[Node(mesh=0)])
     blob, bvs = b"", {}
-    for k, b in [("pos", pos.tobytes()), ("nor", nor.tobytes()), ("fid", fid.tobytes()), ("str", b"".join(ids)), ("off", offs.tobytes())]:
+    for k, b in [("draco", draco), ("str", b"".join(ids)), ("off", offs.tobytes())]:
         b += b"\0" * (-len(b) % 4)
-        g.bufferViews.append(BufferView(buffer=0, byteOffset=len(blob), byteLength=len(b), target=34962 if k in ("pos", "nor", "fid") else None))
+        g.bufferViews.append(BufferView(buffer=0, byteOffset=len(blob), byteLength=len(b)))
         bvs[k] = len(g.bufferViews) - 1; blob += b
-    n = len(pos)
-    g.accessors = [Accessor(bufferView=bvs["pos"], componentType=5126, count=n, type="VEC3", min=pos.min(0).tolist(), max=pos.max(0).tolist()),
-                   Accessor(bufferView=bvs["nor"], componentType=5126, count=n, type="VEC3"),
-                   Accessor(bufferView=bvs["fid"], componentType=5126, count=n, type="SCALAR")]
+    g.accessors = [Accessor(componentType=5126, count=n, type="VEC3", min=pos.min(0).tolist(), max=pos.max(0).tolist()),
+                   Accessor(componentType=5126, count=n, type="VEC3"),
+                   Accessor(componentType=5126, count=n, type="SCALAR"),
+                   Accessor(componentType=5125, count=n, type="SCALAR")]   # indices (0..n-1), stored inside the Draco stream
     g.materials = [Material(pbrMetallicRoughness={"baseColorFactor": [0.85, 0.82, 0.75, 1], "metallicFactor": 0, "roughnessFactor": 1}, doubleSided=True)]
-    prim = Primitive(attributes={"POSITION": 0, "NORMAL": 1, "_FEATURE_ID_0": 2}, material=0)
-    prim.extensions = {"EXT_mesh_features": {"featureIds": [{"featureCount": len(names), "attribute": 0, "propertyTable": 0}]}}
+    prim = Primitive(attributes={"POSITION": 0, "NORMAL": 1, "_FEATURE_ID_0": 2}, indices=3, material=0)
+    prim.extensions = {"EXT_mesh_features": {"featureIds": [{"featureCount": len(names), "attribute": 0, "propertyTable": 0}]},
+                       "KHR_draco_mesh_compression": {"bufferView": bvs["draco"], "attributes": {"POSITION": uid["POSITION"], "NORMAL": uid["NORMAL"], "_FEATURE_ID_0": FID}}}
     g.meshes = [Mesh(primitives=[prim])]
     g.buffers = [Buffer(byteLength=len(blob))]
-    g.extensionsUsed = ["EXT_mesh_features", "EXT_structural_metadata"]
+    g.extensionsUsed = ["EXT_mesh_features", "EXT_structural_metadata", "KHR_draco_mesh_compression"]
+    g.extensionsRequired = ["KHR_draco_mesh_compression"]
     g.extensions = {"EXT_structural_metadata": {
         "schema": {"id": "buildings", "classes": {"building": {"properties": {"objectid": {"type": "STRING"}}}}},
         "propertyTables": [{"class": "building", "count": len(names),

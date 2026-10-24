@@ -9,3 +9,4 @@ pyproj>=3.6
 shapely>=2.0
 mapbox-earcut>=1.0
 pygltflib>=1.16
+DracoPy>=2.2
