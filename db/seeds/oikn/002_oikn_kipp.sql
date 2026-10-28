@@ -10,3 +10,7 @@ ON CONFLICT (code) DO NOTHING;
 INSERT INTO catalog.layer (dataset_id, theme_code, lod, title)
 SELECT d.id, 'building', 1, 'OIKN KIPP landmark buildings LOD1' FROM catalog.dataset d WHERE d.code = 'oikn_kipp'
 ON CONFLICT (dataset_id, theme_code, lod) DO NOTHING;
+
+INSERT INTO catalog.layer (dataset_id, theme_code, lod, title)
+SELECT d.id, 'building', 3, 'OIKN KIPP landmark buildings LOD3' FROM catalog.dataset d WHERE d.code = 'oikn_kipp'
+ON CONFLICT (dataset_id, theme_code, lod) DO NOTHING;

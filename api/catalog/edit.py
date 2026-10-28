@@ -124,12 +124,15 @@ def layer_row(dataset, theme, lod, alias="ro"):
     return r[0]
 
 
+TILE_GEOM = {1: "lod1Solid", 3: "lod3MultiSurface"}      # property each LOD's tiles are built from
+
+
 def mesh_from_db(lineage):
     rows = _rows("""SELECT f.objectid, ST_AsGeoJSON(d.geom, 3) AS g FROM citydb.feature f
-                    JOIN citydb.property p ON p.feature_id = f.id AND p.name = 'lod1Solid'
+                    JOIN citydb.property p ON p.feature_id = f.id AND p.name = %s
                     JOIN citydb.geometry_data gd ON gd.id = p.val_geometry_id
                     CROSS JOIN LATERAL (SELECT (ST_Dump(gd.geometry)).geom) d
-                    WHERE f.lineage = %s AND f.termination_date IS NULL ORDER BY f.id""", [lineage])
+                    WHERE f.lineage = %s AND f.termination_date IS NULL ORDER BY f.id""", [TILE_GEOM[parse_lineage(lineage)[2]], lineage])
     names, index, faces = [], {}, []
     for r in rows:
         if r["objectid"] not in index: index[r["objectid"]] = len(names); names.append(r["objectid"])
@@ -362,7 +365,7 @@ def _run_import(job, user, layer, dataset, theme, lod, path, fmt):
             if not counts: raise ValueError("the file contained no city objects that could be imported")
             cur.execute("SELECT catalog.refresh_derived()")
             report["tileset"] = None
-            if lod == 1:                                  # tiles are built from lod1Solid only
+            if lod in TILE_GEOM:                          # tiles are built from lod1Solid / lod3MultiSurface
                 try:
                     with transaction.atomic(using="default"):   # savepoint: a failed rebuild keeps the imported data
                         v, url, n = sync_tiles(cur, layer, dataset, theme, lod)
